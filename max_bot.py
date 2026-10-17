@@ -1201,9 +1201,13 @@ def handle_message(update: MaxUpdate) -> None:
         handle_command(update, command, args)
         return
 
-    # В групповых чатах на обычные реплики не реагируем, иначе бот будет
-    # вмешиваться в каждое обсуждение.
-    if not update.is_private and update.chat_id != _moderator_chat_id():
+    # В любом групповом чате бот отвечает ТОЛЬКО на команды.
+    #
+    # Раньше для чата модераторов было исключение — там он работал как в
+    # личке и лез с ответами помощника в каждое обсуждение, мешая разбору
+    # новостей. Обсуждение поста между кураторами — не вопрос к боту.
+    # Нужен ответ помощника — пишите боту в личку или /ask <вопрос>.
+    if not update.is_private:
         return
 
     if update.user_id in _awaiting_question:

@@ -274,6 +274,28 @@ def scenario_access() -> None:
     check("ничего не опубликовано", not recorder.sent)
 
 
+def scenario_group_silence() -> None:
+    """Бот не должен вмешиваться в переписку групповых чатов."""
+    print("\nМолчание в группах")
+
+    # Обычный текст в чате модераторов: бот обязан промолчать, иначе
+    # ответы помощника мешают кураторам разбирать новости.
+    send_text("а что думаете по этой новости?", chat_type="chat")
+    check("в чате модераторов бот молчит на обычный текст", not recorder.sent,
+          recorder.all_text[:70])
+
+    send_text("привет", chat_type="chat")
+    check("на приветствие в группе тоже молчит", not recorder.sent)
+
+    # Но команды в группе работать должны.
+    send_text("/chatid", chat_type="chat")
+    check("команда в группе работает", "ID этого чата" in recorder.all_text)
+
+    # В личке поведение прежнее.
+    send_text("У меня украли телефон, что делать?")
+    check("в личке бот по-прежнему отвечает", bool(recorder.sent))
+
+
 def scenario_staff() -> None:
     print("\nМодератор и администратор")
 
@@ -361,7 +383,8 @@ def main() -> int:
     db.add_resources_bulk(settings.db_path, build_seed_resources())
 
     for scenario in (scenario_public, scenario_assistant_offline,
-                     scenario_access, scenario_staff, scenario_moderation):
+                     scenario_access, scenario_group_silence, scenario_staff,
+                     scenario_moderation):
         try:
             scenario()
         except Exception:
