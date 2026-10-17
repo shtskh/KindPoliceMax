@@ -299,7 +299,8 @@ def staff_help(role: UserRole) -> str:
             "<b>Администрирование</b>",
             "/diag — диагностика настроек",
             "/schedule_on, /schedule_off, /set_interval N",
-            "/add_moderator ID, /remove_moderator ID, /list_moderators",
+            "/list_moderators — кто имеет доступ (там же кнопки назначить/снять)",
+            "/add_moderator — выбрать из участников чата кнопками",
             "/clear → /clear_confirm — архивировать очередь",
             "/cleanup_images — удалить неиспользуемые картинки",
             "/assistant_log — последние вопросы к помощнику",
@@ -889,32 +890,19 @@ def _handle_admin_command(update: MaxUpdate, command: str, args: str) -> None:
         reply(update, f"✅ Интервал: {minutes} мин."); return
 
     if command == "add_moderator":
-        raw = args.strip()
-        if not raw.isdigit():
-            reply(update,
-                  "Использование: <code>/add_moderator ID</code>\n\n"
-                  "ID человек узнаёт командой /whoami в этом боте.")
-            return
-        db.upsert_user(settings.db_path, BotUser(
-            telegram_id=int(raw), role=UserRole.MODERATOR, added_by=update.user_id))
-        reply(update, f"✅ {raw} назначен модератором."); return
+        _cmd_add_moderator(update, args); return
 
     if command == "remove_moderator":
         raw = args.strip()
         if not raw.isdigit():
-            reply(update, "Использование: /remove_moderator ID"); return
-        if int(raw) in settings.bot_admin_ids:
-            reply(update, "⛔ Этот админ задан в MAX_ADMIN_IDS."); return
-        db.remove_user(settings.db_path, int(raw))
-        reply(update, f"✅ Роль снята с {raw}."); return
+            # Без аргумента показываем список с кнопками: номера
+            # идентификаторов никто наизусть не помнит.
+            _show_moderators(update, with_remove_buttons=True)
+            return
+        reply(update, _remove_moderator(update, int(raw))); return
 
     if command == "list_moderators":
-        users = db.list_users(settings.db_path)
-        if not users:
-            reply(update, "Список пуст."); return
-        lines = [f"{'👑' if u.role == UserRole.ADMIN else '🛡'} "
-                 f"<code>{u.telegram_id}</code> — {u.role.value}" for u in users]
-        reply(update, "👥 <b>Доступ к боту</b>\n\n" + "\n".join(lines)); return
+        _show_moderators(update, with_remove_buttons=True); return
 
     if command == "clear":
         pending = db.get_by_status(settings.db_path, NewsStatus.PENDING_MODERATION)
@@ -981,6 +969,139 @@ def _handle_admin_command(update: MaxUpdate, command: str, args: str) -> None:
         return
 
     reply(update, "Неизвестная команда. Список — /help")
+
+
+# --------------------------------------------------------------------------
+# Модераторы
+# --------------------------------------------------------------------------
+#
+# В MAX человек не видит собственный числовой идентификатор, и сообщить
+# его администратору не может. Поэтому основной способ назначения —
+# кнопки со списком участников чата (GET /chats/{id}/members), а ввод
+# ID оставлен как запасной вариант.
+
+def _display_name(user: BotUser) -> str:
+    if user.full_name:
+        return user.full_name
+    if user.username:
+        return f"@{user.username}"
+    # Роль могли выдать по ID или ботстрапом из MAX_ADMIN_IDS, когда имя
+    # ещё не было известно. Оно появляется в таблице аудитории при первом
+    # обращении человека к боту — берём оттуда, чтобы в списке не было
+    # одних цифр.
+    known = db.get_audience_name(settings.db_path, user.telegram_id)
+    return known or f"ID {user.telegram_id}"
+
+
+def _cmd_add_moderator(update: MaxUpdate, args: str) -> None:
+    raw = args.strip().lstrip("@")
+
+    if raw.isdigit():
+        reply(update, _grant_moderator(update, int(raw)))
+        return
+
+    if update.chat_id is None or update.is_private:
+        reply(update,
+              "Назначать модераторов удобнее в чате модерации: там бот "
+              "покажет участников кнопками.\n\n"
+              "Из личной переписки можно указать ID: "
+              "<code>/add_moderator 3959125</code>\n"
+              "Свой ID человек узнаёт командой /whoami.")
+        return
+
+    members = bot.get_chat_members(update.chat_id)
+    candidates = [
+        m for m in members
+        if not m.get("is_bot")
+        and not has_role(m.get("user_id"), UserRole.MODERATOR)
+    ]
+
+    if not candidates:
+        reply(update,
+              "Все участники этого чата уже имеют доступ "
+              "(или в чате только бот).", [BACK_TO_MENU])
+        return
+
+    rows = [
+        [callback_button(
+            f"➕ {m.get('name') or m.get('first_name') or m['user_id']}",
+            f"mod:add:{m['user_id']}",
+        )]
+        for m in candidates[:20]
+    ]
+    reply(update,
+          "👥 <b>Кого назначить модератором?</b>\n\n"
+          "Модератор сможет запускать сбор новостей и публиковать посты.",
+          rows)
+
+
+def _grant_moderator(update: MaxUpdate, user_id: int, name: str | None = None) -> str:
+    """Выдаёт роль модератора. Возвращает текст для ответа."""
+    existing = db.get_user(settings.db_path, user_id)
+    if existing and existing.role == UserRole.ADMIN:
+        return "Это администратор — у него и так полный доступ."
+
+    # Имя берём из чата или из того, что уже знаем о пользователе:
+    # в списке «кто имеет доступ» голые цифры бесполезны.
+    if name is None and update.chat_id is not None:
+        for member in bot.get_chat_members(update.chat_id):
+            if member.get("user_id") == user_id:
+                name = member.get("name") or member.get("first_name")
+                break
+
+    db.upsert_user(settings.db_path, BotUser(
+        telegram_id=user_id,
+        role=UserRole.MODERATOR,
+        full_name=name or (existing.full_name if existing else None),
+        username=existing.username if existing else None,
+        added_by=update.user_id,
+    ))
+    logger.info("Модератором назначен %s (%s)", user_id, name)
+    return f"✅ {name or user_id} назначен модератором."
+
+
+def _remove_moderator(update: MaxUpdate, user_id: int) -> str:
+    if user_id in settings.bot_admin_ids:
+        return "⛔ Этот администратор задан в MAX_ADMIN_IDS — снимите его там."
+
+    if user_id == update.user_id:
+        return "⛔ Нельзя снять роль с самого себя."
+
+    existing = db.get_user(settings.db_path, user_id)
+    if existing is None:
+        return "У этого человека и так нет роли."
+
+    db.remove_user(settings.db_path, user_id)
+    logger.info("Роль снята с %s", user_id)
+    return f"✅ Роль снята: {_display_name(existing)}"
+
+
+def _show_moderators(update: MaxUpdate, with_remove_buttons: bool = False) -> None:
+    users = db.list_users(settings.db_path)
+    if not users:
+        reply(update, "Список пуст. Назначить: /add_moderator")
+        return
+
+    lines = ["👥 <b>Доступ к боту</b>\n"]
+    rows: list[list[dict]] = []
+
+    for user in users:
+        icon = "👑" if user.role == UserRole.ADMIN else "🛡"
+        fixed = " · из MAX_ADMIN_IDS" if user.telegram_id in settings.bot_admin_ids else ""
+        lines.append(
+            f"{icon} {html.escape(_display_name(user))} — "
+            f"<code>{user.telegram_id}</code>{fixed}"
+        )
+        # Снимать можно только модераторов: администратора из переменной
+        # окружения кнопкой не убрать, и показывать такую кнопку нечестно.
+        if (with_remove_buttons and user.role == UserRole.MODERATOR
+                and user.telegram_id not in settings.bot_admin_ids):
+            rows.append([callback_button(
+                f"❌ Снять: {_display_name(user)[:24]}", f"mod:del:{user.telegram_id}"
+            )])
+
+    rows.append([callback_button("➕ Добавить модератора", "mod:pick")])
+    reply(update, "\n".join(lines), rows)
 
 
 def _cmd_stats(update: MaxUpdate) -> None:
@@ -1133,6 +1254,26 @@ def handle_callback(update: MaxUpdate) -> None:
                 updated = regenerate_image(item_id, True)
                 if updated:
                     send_to_moderators(updated, chat_id=update.chat_id)
+        return
+
+    # --- управление модераторами (только админ) ---
+    if payload.startswith("mod:"):
+        if not has_role(update.user_id, UserRole.ADMIN):
+            ack("Только для администратора")
+            return
+
+        action, _, value = payload[4:].partition(":")
+        if action == "pick":
+            ack()
+            _cmd_add_moderator(update, "")
+        elif action == "add" and value.isdigit():
+            ack(_grant_moderator(update, int(value)))
+            _show_moderators(update, with_remove_buttons=True)
+        elif action == "del" and value.isdigit():
+            ack(_remove_moderator(update, int(value)))
+            _show_moderators(update, with_remove_buttons=True)
+        else:
+            ack()
         return
 
     ack()

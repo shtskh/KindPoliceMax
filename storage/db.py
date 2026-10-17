@@ -727,6 +727,25 @@ def get_audience_region(db_path: str, telegram_id: int) -> str | None:
     return row["region"] if row else None
 
 
+def get_audience_name(db_path: str, telegram_id: int) -> str | None:
+    """
+    Имя человека из таблицы аудитории.
+
+    Нужно для списка «кто имеет доступ»: роль может быть выдана по
+    идентификатору (или ботстрапом из переменной окружения), когда имя
+    ещё неизвестно, а в аудиторию оно попадает при первом же обращении
+    к боту. Иначе в списке модераторов видны одни голые цифры.
+    """
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT full_name, username FROM bot_audience WHERE telegram_id = ?",
+            (telegram_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return row["full_name"] or (f"@{row['username']}" if row["username"] else None)
+
+
 def mark_audience_blocked(db_path: str, telegram_id: int) -> None:
     """
     Пользователь заблокировал бота (Telegram сообщает об этом ошибкой

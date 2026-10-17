@@ -325,6 +325,32 @@ class MaxBot:
             logger.warning("Не удалось ответить на callback: %s", exc)
             return False
 
+    # -- участники чата -----------------------------------------------------
+
+    def get_chat_members(self, chat_id: int, limit: int = 100) -> list[dict]:
+        """
+        Участники чата с именами.
+
+        Нужно, чтобы назначать модераторов кнопками: сам по себе MAX
+        показывает пользователю только имя, а его числовой идентификатор
+        человек нигде не видит и продиктовать администратору не может.
+        """
+        try:
+            data = self._request(
+                "GET", f"/chats/{chat_id}/members", params={"count": limit}
+            )
+        except MaxApiError as exc:
+            logger.warning("Не удалось получить участников чата %s: %s", chat_id, exc)
+            return []
+        return data.get("members") or []
+
+    def get_chat(self, chat_id: int) -> dict:
+        try:
+            return self._request("GET", f"/chats/{chat_id}")
+        except MaxApiError as exc:
+            logger.warning("Не удалось получить чат %s: %s", chat_id, exc)
+            return {}
+
     # -- изображения --------------------------------------------------------
 
     def upload_image(self, image_path: str | Path) -> dict | None:

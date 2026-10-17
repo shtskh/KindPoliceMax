@@ -67,6 +67,7 @@ class RecordingBot:
     def __init__(self) -> None:
         self.sent: list[dict] = []
         self.answers: list[dict] = []
+        self.members: list[dict] = []
 
     def send_message(self, *, chat_id=None, user_id=None, text="",
                      buttons=None, image_path=None, notify=True):
@@ -81,6 +82,12 @@ class RecordingBot:
         self.answers.append({"callback_id": callback_id,
                              "notification": notification})
         return True
+
+    def get_chat_members(self, chat_id, limit: int = 100) -> list[dict]:
+        return self.members
+
+    def get_chat(self, chat_id) -> dict:
+        return {"chat_id": chat_id, "title": "Тестовый чат"}
 
     def clear(self) -> None:
         self.sent.clear()
@@ -317,7 +324,7 @@ def scenario_staff() -> None:
         ("/list_moderators", "Доступ к боту"),
         ("/pending", "Очередь пуста"),
         ("/list_resources institute", "edu_"),
-        ("/add_moderator", "Использование"),
+        ("/add_moderator", "whoami"),  # в личке бот подсказывает, как узнать ID
         ("/broadcast", "Использование"),
         ("/clear", "Очередь уже пуста"),
     ):
@@ -334,6 +341,100 @@ def scenario_staff() -> None:
 
     send_text("/несуществующая")
     check("неизвестная команда не роняет бота", bool(recorder.sent))
+
+
+def scenario_moderators() -> None:
+    """Назначение и снятие модераторов — целиком, включая обход доступа."""
+    print("\nУправление модераторами")
+
+    OUTSIDER, HELPER = 70001, 70002
+
+    # Подменяем список участников чата: в тестах сети нет.
+    recorder.members = [
+        {"user_id": USER_ID, "name": "Админ", "is_bot": False, "is_admin": True},
+        {"user_id": HELPER, "name": "Наиля", "is_bot": False},
+        {"user_id": 999999, "name": "Бот", "is_bot": True},
+    ]
+
+    # --- посторонний не может ничего ---
+    send_text("/list_moderators", user_id=OUTSIDER)
+    check("посторонний не видит список", "нет доступа" in recorder.all_text.lower())
+
+    press(f"mod:add:{OUTSIDER}", user_id=OUTSIDER)
+    check("посторонний не назначит себя кнопкой",
+          any(a["notification"] == "Только для администратора" for a in recorder.answers))
+    check("роль не выдана",
+          db.get_user(settings.db_path, OUTSIDER) is None)
+
+    # --- админ видит список с кнопками ---
+    send_text("/list_moderators")
+    check("админ видит список", "Доступ к боту" in recorder.all_text)
+    check("есть кнопка добавления", "mod:pick" in recorder.payloads())
+
+    # --- выбор из участников чата ---
+    send_text("/add_moderator", chat_type="chat")
+    check("показаны участники чата", f"mod:add:{HELPER}" in recorder.payloads(),
+          str(recorder.payloads()))
+    check("бот не предлагается", "mod:add:999999" not in recorder.payloads())
+    check("действующий админ не предлагается",
+          f"mod:add:{USER_ID}" not in recorder.payloads())
+
+    # --- назначение кнопкой ---
+    press(f"mod:add:{HELPER}")
+    helper = db.get_user(settings.db_path, HELPER)
+    check("модератор назначен", helper is not None and helper.role == UserRole.MODERATOR)
+    check("имя сохранено, а не голый ID",
+          helper is not None and helper.full_name == "Наиля", str(helper))
+    check("в списке видно имя", "Наиля" in recorder.all_text)
+
+    # --- назначенный получает доступ ---
+    send_text("/pending", user_id=HELPER)
+    check("новый модератор получил доступ",
+          "нет доступа" not in recorder.all_text.lower())
+
+    # --- но не админский ---
+    send_text("/broadcast привет", user_id=HELPER)
+    check("модератор не может рассылку",
+          "только администратору" in recorder.all_text.lower(),
+          recorder.all_text[:70])
+
+    # --- снятие кнопкой ---
+    send_text("/list_moderators")
+    check("появилась кнопка снятия", f"mod:del:{HELPER}" in recorder.payloads())
+    press(f"mod:del:{HELPER}")
+    check("роль снята", db.get_user(settings.db_path, HELPER) is None)
+
+    # --- защита администраторов из переменной окружения ---
+    db.upsert_user(settings.db_path,
+                   BotUser(telegram_id=4242, role=UserRole.ADMIN, full_name="Защищённый"))
+    settings.bot_admin_ids.append(4242)
+    send_text("/remove_moderator 4242")
+    check("админа из MAX_ADMIN_IDS не снять",
+          "MAX_ADMIN_IDS" in recorder.all_text,
+          recorder.all_text[:80])
+    check("он остался на месте", db.get_user(settings.db_path, 4242) is not None)
+
+    send_text("/list_moderators")
+    check("кнопки снятия для него нет", "mod:del:4242" not in recorder.payloads())
+    settings.bot_admin_ids.remove(4242)
+
+    # --- нельзя снять себя ---
+    send_text(f"/remove_moderator {USER_ID}")
+    check("нельзя снять роль с себя", "самого себя" in recorder.all_text)
+
+    # --- добавление по ID из личной переписки ---
+    send_text("/add_moderator 70003")
+    check("назначение по ID работает",
+          db.get_user(settings.db_path, 70003) is not None)
+
+    # --- мусор на входе не ломает ---
+    send_text("/remove_moderator абвгд")
+    check("нечисловой ID не роняет бота", bool(recorder.sent))
+    send_text("/add_moderator")
+    check("команда без аргументов в личке подсказывает",
+          "ID" in recorder.all_text or "whoami" in recorder.all_text)
+    press("mod:add:не_число")
+    check("битый payload не роняет бота", True)
 
 
 def scenario_moderation() -> None:
@@ -384,7 +485,7 @@ def main() -> int:
 
     for scenario in (scenario_public, scenario_assistant_offline,
                      scenario_access, scenario_group_silence, scenario_staff,
-                     scenario_moderation):
+                     scenario_moderators, scenario_moderation):
         try:
             scenario()
         except Exception:
