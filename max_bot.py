@@ -290,6 +290,7 @@ def staff_help(role: UserRole) -> str:
         "/pending — показать очередь модерации",
         "/stats — статистика работы бота",
         "/audience — статистика по пользователям",
+        "/sources — проверить доступность источников с сервера",
         "/schedule_status — статус автосбора",
         "/chatid — идентификатор текущего чата",
     ]
@@ -846,6 +847,11 @@ def handle_command(update: MaxUpdate, command: str, args: str) -> None:
             time.sleep(0.4)
         return
 
+    if command == "sources":
+        reply(update, "🔌 Проверяю источники, это займёт полминуты...")
+        _worker.submit(_cmd_sources, update)
+        return
+
     if command == "stats":
         _cmd_stats(update); return
     if command == "audience":
@@ -1102,6 +1108,17 @@ def _show_moderators(update: MaxUpdate, with_remove_buttons: bool = False) -> No
 
     rows.append([callback_button("➕ Добавить модератора", "mod:pick")])
     reply(update, "\n".join(lines), rows)
+
+
+def _cmd_sources(update: MaxUpdate) -> None:
+    """Проверка доступности источников с машины, где запущен бот."""
+    from pipeline.source_check import check_sources, format_report
+
+    try:
+        reply(update, format_report(check_sources()))
+    except Exception:
+        logger.exception("Проверка источников не удалась")
+        reply(update, "❌ Не удалось проверить источники, см. логи.")
 
 
 def _cmd_stats(update: MaxUpdate) -> None:
