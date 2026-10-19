@@ -49,6 +49,7 @@ from pipeline import assistant, image_pipeline
 from pipeline.orchestrator import regenerate_image, run_collection_cycle
 from pipeline.post_formatting import FOOTER_MARKER
 from storage import db
+from version import APP_VERSION, CHANGES
 from storage.models import (
     BotUser, NewsStatus, PublicResource, ResourceCategory, UserRole,
 )
@@ -293,6 +294,7 @@ def staff_help(role: UserRole) -> str:
         "/sources — проверить доступность источников с сервера",
         "/schedule_status — статус автосбора",
         "/chatid — идентификатор текущего чата",
+        "/version — версия кода (проверить, свежая ли сборка)",
     ]
     if role == UserRole.ADMIN:
         lines += [
@@ -847,6 +849,15 @@ def handle_command(update: MaxUpdate, command: str, args: str) -> None:
             time.sleep(0.4)
         return
 
+    if command == "version":
+        reply(update,
+              f"🏷 <b>Версия кода:</b> {APP_VERSION}\n\n"
+              "<b>Что в этой версии:</b>\n"
+              + "\n".join(f"• {line}" for line in CHANGES)
+              + "\n\n<i>Если версия старее ожидаемой — хостинг собрал "
+                "не последний код, нужна пересборка.</i>")
+        return
+
     if command == "sources":
         reply(update, "🔌 Проверяю источники, это займёт полминуты...")
         _worker.submit(_cmd_sources, update)
@@ -1173,6 +1184,7 @@ def _cmd_diag(update: MaxUpdate) -> None:
     scheduler = _get_scheduler_state()
     lines = [
         "🔧 <b>Диагностика</b>\n",
+        f"🏷 Версия кода: <b>{APP_VERSION}</b>\n",
         f"{'✅' if settings.max_bot_token else '❌'} Токен MAX",
         f"{'✅' if settings.moderator_chat_id else '❌'} Чат модераторов: "
         f"<code>{settings.moderator_chat_id or '—'}</code>",
@@ -1463,8 +1475,8 @@ def main() -> None:
     bot = MaxBot(settings.max_bot_token)
 
     me = bot.get_me()
-    logger.info("Бот MAX «%s» (@%s, id=%s) запущен",
-                me.get("name"), me.get("username"), me.get("user_id"))
+    logger.info("Бот MAX «%s» (@%s, id=%s) запущен. Версия кода: %s",
+                me.get("name"), me.get("username"), me.get("user_id"), APP_VERSION)
 
     threading.Thread(target=scheduler_loop, daemon=True,
                      name="scheduler").start()
