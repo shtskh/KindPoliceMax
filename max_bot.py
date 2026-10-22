@@ -114,7 +114,8 @@ def seed_public_resources(update_existing: bool = False) -> int:
 # Отправка
 # ==========================================================================
 
-def reply(update: MaxUpdate, text: str, buttons=None, image_path=None) -> None:
+def reply(update: MaxUpdate, text: str, buttons=None, image_path=None,
+          video_path=None) -> None:
     """
     Отвечает туда же, откуда пришло событие.
 
@@ -122,11 +123,11 @@ def reply(update: MaxUpdate, text: str, buttons=None, image_path=None) -> None:
     по user_id, иначе сообщение просто некуда адресовать.
     """
     if update.chat_id is not None:
-        bot.send_message(chat_id=update.chat_id, text=text,
-                         buttons=buttons, image_path=image_path)
+        bot.send_message(chat_id=update.chat_id, text=text, buttons=buttons,
+                         image_path=image_path, video_path=video_path)
     elif update.user_id is not None:
-        bot.send_message(user_id=update.user_id, text=text,
-                         buttons=buttons, image_path=image_path)
+        bot.send_message(user_id=update.user_id, text=text, buttons=buttons,
+                         image_path=image_path, video_path=video_path)
 
 
 def _track(update: MaxUpdate) -> None:
@@ -224,7 +225,10 @@ def build_moderation_text(item) -> str:
 
     lines.append(build_post_text(item) or "<i>Текст новости пуст.</i>")
 
-    footer = ["➖➖➖➖➖",
+    footer = ["➖➖➖➖➖"]
+    if item.video_path:
+        footer.append("🎬 видео из источника")
+    footer += [
               f"🖼 {_IMAGE_SOURCE_LABELS.get(item.image_source, item.image_source or 'нет')}",
               f"🔗 {html.escape(item.source_name or 'источник неизвестен')}"]
     if item.tags:
@@ -634,8 +638,12 @@ def send_to_moderators(item, chat_id: int | None = None) -> None:
     image = (resolve(item.image_path)
              if item.image_path and image_pipeline.image_exists(item.image_path)
              else None)
+    video = (resolve(item.video_path)
+             if item.video_path and image_pipeline.image_exists(item.video_path)
+             else None)
     bot.send_message(chat_id=target, text=build_moderation_text(item),
-                     buttons=moderation_buttons(item.id), image_path=image)
+                     buttons=moderation_buttons(item.id),
+                     image_path=image, video_path=video)
 
 
 def _moderator_chat_id() -> int | None:
@@ -672,8 +680,11 @@ def approve_item(update: MaxUpdate, item_id: str) -> str:
     image = (resolve(item.image_path)
              if item.image_path and image_pipeline.image_exists(item.image_path)
              else None)
+    video = (resolve(item.video_path)
+             if item.video_path and image_pipeline.image_exists(item.video_path)
+             else None)
     sent = bot.send_message(chat_id=target, text=build_post_text(item),
-                            image_path=image)
+                            image_path=image, video_path=video)
 
     if sent is None:
         # Возвращаем в очередь, иначе новость застрянет в статусе approved.

@@ -70,10 +70,12 @@ class RecordingBot:
         self.members: list[dict] = []
 
     def send_message(self, *, chat_id=None, user_id=None, text="",
-                     buttons=None, image_path=None, notify=True):
+                     buttons=None, image_path=None, video_path=None,
+                     notify=True):
         self.sent.append({
             "chat_id": chat_id, "user_id": user_id, "text": text,
             "buttons": buttons or [], "image_path": image_path,
+            "video_path": video_path,
         })
         return {"message": {"body": {"mid": "mid.test"}}}
 

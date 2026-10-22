@@ -241,6 +241,7 @@ class MaxBot:
         text: str,
         buttons: list[list[dict]] | None = None,
         image_path: str | Path | None = None,
+        video_path: str | Path | None = None,
         notify: bool = True,
     ) -> dict | None:
         """
@@ -253,7 +254,14 @@ class MaxBot:
 
         attachments: list[dict] = []
 
-        if image_path:
+        # Видео важнее фото: ролик показывает событие целиком. Если он
+        # не загрузился, остаётся картинка.
+        if video_path:
+            attachment = self.upload_media(video_path, "video")
+            if attachment:
+                attachments.append(attachment)
+
+        if image_path and not attachments:
             attachment = self.upload_image(image_path)
             if attachment:
                 attachments.append(attachment)
@@ -353,47 +361,75 @@ class MaxBot:
 
     # -- изображения --------------------------------------------------------
 
+    def upload_media(self, path: str | Path, media_type: str) -> dict | None:
+        """
+        Загрузка медиафайла заданного типа (image / video / file).
+
+        Проверено: POST /uploads?type=video отдаёт адрес загрузчика так
+        же, как для картинок, — различается только хранилище на стороне
+        MAX.
+        """
+        return self._upload(path, media_type)
+
     def upload_image(self, image_path: str | Path) -> dict | None:
+        """Загрузка картинки — частный случай _upload."""
+        return self._upload(image_path, "image")
+
+    # Чем отдавать файл загрузчику: MAX различает хранилища по типу.
+    _CONTENT_TYPES = {
+        "image": "image/jpeg",
+        "video": "video/mp4",
+        "file": "application/octet-stream",
+    }
+
+    def _upload(self, file_path: str | Path, media_type: str) -> dict | None:
         """
         Двухшаговая загрузка: получить временный URL, залить туда файл.
-        Возвращает готовое вложение или None — тогда пост уйдёт текстом.
+        Возвращает готовое вложение или None — тогда пост уйдёт без него.
+
+        Видео заливается дольше картинки, поэтому таймаут отдельный:
+        на ролике в несколько десятков мегабайт стандартных двух минут
+        может не хватить, и вложение терялось бы без всякой ошибки.
         """
-        path = Path(image_path)
+        path = Path(file_path)
         if not path.is_file():
-            logger.warning("Файл изображения не найден: %s", path)
+            logger.warning("Файл не найден: %s", path)
             return None
 
+        timeout = 300 if media_type == "video" else 120
+
         try:
-            slot = self._request("POST", "/uploads", params={"type": "image"})
+            slot = self._request("POST", "/uploads", params={"type": media_type})
             upload_url = slot.get("url")
             if not upload_url:
-                logger.warning("MAX не вернул url для загрузки")
+                logger.warning("MAX не вернул url для загрузки (%s)", media_type)
                 return None
 
+            content_type = self._CONTENT_TYPES.get(media_type, "application/octet-stream")
             with open(path, "rb") as handle:
                 response = self.session.post(
-                    upload_url, files={"data": (path.name, handle, "image/jpeg")},
-                    timeout=120,
+                    upload_url, files={"data": (path.name, handle, content_type)},
+                    timeout=timeout,
                 )
             if response.status_code != 200:
-                logger.warning("Загрузка изображения: HTTP %s", response.status_code)
+                logger.warning("Загрузка %s: HTTP %s", media_type, response.status_code)
                 return None
 
             data = response.json()
         except (MaxApiError, requests.RequestException, ValueError, OSError) as exc:
-            logger.warning("Не удалось загрузить изображение в MAX: %s", exc)
+            logger.warning("Не удалось загрузить %s в MAX: %s", media_type, exc)
             return None
 
-        # Формат ответа зависит от версии API: либо словарь photos,
-        # либо одиночный token. Поддерживаем оба.
+        # Формат ответа зависит от типа и версии API: для картинок это
+        # словарь photos, для видео и файлов — token. Поддерживаем оба.
         if isinstance(data, dict):
-            if data.get("photos"):
+            if media_type == "image" and data.get("photos"):
                 return {"type": "image", "payload": {"photos": data["photos"]}}
             token = data.get("token") or _dig(data, "token")
             if token:
-                return {"type": "image", "payload": {"token": token}}
+                return {"type": media_type, "payload": {"token": token}}
 
-        logger.warning("Непонятный ответ загрузки: %s", str(data)[:200])
+        logger.warning("Непонятный ответ загрузки (%s): %s", media_type, str(data)[:200])
         return None
 
     # -- события ------------------------------------------------------------
