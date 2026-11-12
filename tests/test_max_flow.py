@@ -481,13 +481,86 @@ def scenario_moderation() -> None:
           not [m for m in recorder.sent if m["chat_id"] == 888])
 
 
+def scenario_polling() -> None:
+    """
+    Длинный опрос: таймаут — это «событий не было», а не авария.
+
+    На сервере таймауты идут постоянно, и раньше каждый стоил боту
+    около полутора минут: две повторные попытки с паузами плюс пауза
+    после отказа. Всё это время бот не отвечал на команды.
+    """
+    import time as _time
+
+    import requests
+
+    import maxapi
+
+    print()
+    print("--- Опрос событий ---")
+
+    client = maxapi.MaxBot("test-token")
+    attempts = {"count": 0}
+
+    def always_timeout(method, url, **kwargs):
+        attempts["count"] += 1
+        raise requests.Timeout("read timed out")
+
+    client.session.request = always_timeout
+
+    started = _time.monotonic()
+    result = client.get_updates(timeout=30)
+    spent = _time.monotonic() - started
+
+    check("таймаут не роняет опрос", result == [])
+    check("повторных попыток нет", attempts["count"] == 1,
+          f"попыток: {attempts['count']}")
+    # Без паузы следующий опрос начинается сразу: события, пришедшие
+    # за это время, не ждут лишних секунд.
+    check("бот не простаивает после таймаута", spent < 1.0,
+          f"{spent:.2f} с")
+    check("таймауты подряд считаются", client._idle_timeouts == 1)
+
+    # Настоящая ошибка сети идёт другим путём: она не «нет событий»,
+    # поэтому попадает в журнал как предупреждение и не засчитывается
+    # в череду таймаутов, по которой судят о недоступности API.
+    attempts["count"] = 0
+    client._idle_timeouts = 7
+
+    def always_broken(method, url, **kwargs):
+        attempts["count"] += 1
+        raise requests.ConnectionError("соединение разорвано")
+
+    client.session.request = always_broken
+    check("сетевая ошибка не роняет опрос", client.get_updates(timeout=30) == [])
+    check("сетевая ошибка не считается таймаутом",
+          client._idle_timeouts == 7, str(client._idle_timeouts))
+    client._idle_timeouts = 0
+
+    # Успешный ответ сбрасывает счётчик, иначе предупреждение о череде
+    # таймаутов вылезало бы и при нормальной работе.
+    def ok(method, url, **kwargs):
+        class Response:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {"marker": 5, "updates": []}
+
+        return Response()
+
+    client.session.request = ok
+    client.get_updates(timeout=30)
+    check("счётчик сбрасывается после ответа", client._idle_timeouts == 0)
+
+
 def main() -> int:
     db.init_db(settings.db_path)
     db.add_resources_bulk(settings.db_path, build_seed_resources())
 
     for scenario in (scenario_public, scenario_assistant_offline,
                      scenario_access, scenario_group_silence, scenario_staff,
-                     scenario_moderators, scenario_moderation):
+                     scenario_moderators, scenario_moderation,
+                     scenario_polling):
         try:
             scenario()
         except Exception:

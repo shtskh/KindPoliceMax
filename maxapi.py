@@ -58,6 +58,19 @@ class MaxApiError(RuntimeError):
         self.status_code = status_code
 
 
+class MaxTimeout(MaxApiError):
+    """
+    Истекло время ожидания ответа.
+
+    Для длинного опроса это не авария: сервер MAX просто не прислал
+    событий и не закрыл соединение вовремя. Раньше такой таймаут шёл
+    общим путём — две повторные попытки с паузами и запись в журнал
+    как об ошибке, — и бот терял около полутора минут на пустом месте,
+    а журнал заполнялся предупреждениями при полностью исправной
+    работе.
+    """
+
+
 # --------------------------------------------------------------------------
 # Кнопки
 # --------------------------------------------------------------------------
@@ -181,12 +194,16 @@ class MaxBot:
         # Именно без «Bearer» — см. шапку модуля.
         self.session.headers.update({"Authorization": token})
         self._marker: int | None = None
+        # Сколько длинных опросов подряд завершились по таймауту.
+        # Единичный — обычное дело, череда означает недоступность API.
+        self._idle_timeouts = 0
 
     # -- низкий уровень -----------------------------------------------------
 
     def _request(
         self, method: str, path: str, *, params: dict | None = None,
         payload: dict | None = None, timeout: float = 30.0, retries: int = 3,
+        timeout_is_normal: bool = False,
     ) -> dict:
         url = f"{self.api_base}{path}"
         last_error = "неизвестная ошибка"
@@ -196,6 +213,15 @@ class MaxBot:
                 response = self.session.request(
                     method, url, params=params, json=payload, timeout=timeout
                 )
+            except requests.Timeout as exc:
+                # Для длинного опроса это ожидаемый исход, а не поломка:
+                # решение принимает вызывающий код.
+                if timeout_is_normal:
+                    raise MaxTimeout(f"[{path}] ожидание дольше {timeout} с") from exc
+                last_error = f"сеть: {type(exc).__name__}: {exc}"
+                logger.warning("[%s %s] попытка %d: %s", method, path, attempt, last_error)
+                time.sleep(min(2 ** attempt, 15))
+                continue
             except requests.RequestException as exc:
                 last_error = f"сеть: {type(exc).__name__}: {exc}"
                 logger.warning("[%s %s] попытка %d: %s", method, path, attempt, last_error)
@@ -446,12 +472,31 @@ class MaxBot:
         try:
             data = self._request(
                 "GET", "/updates", params=params,
-                timeout=timeout + 15, retries=2,
+                # Запас к длинному опросу щедрый: сервер MAX нередко
+                # отвечает позже заявленного, и обрывать соединение
+                # раньше него — значит терять уже накопленные события.
+                timeout=timeout + 30, retries=1,
+                timeout_is_normal=True,
             )
+        except MaxTimeout:
+            self._idle_timeouts += 1
+            # Молчим про единичные таймауты, но о череде подряд
+            # сообщаем: это уже похоже на недоступность API.
+            if self._idle_timeouts % 10 == 0:
+                logger.warning(
+                    "Опрос событий: %d таймаутов подряд, события не приходят.",
+                    self._idle_timeouts,
+                )
+            else:
+                logger.debug("Опрос событий: таймаут, событий не было.")
+            # Паузы нет намеренно: следующий длинный опрос можно начинать сразу.
+            return []
         except MaxApiError as exc:
             logger.warning("Опрос событий не удался: %s", exc)
             time.sleep(3)
             return []
+
+        self._idle_timeouts = 0
 
         self._marker = data.get("marker", self._marker)
         updates = data.get("updates") or []
