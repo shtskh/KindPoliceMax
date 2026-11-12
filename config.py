@@ -334,6 +334,20 @@ class Settings:
 
     # --- Настройки публикации по умолчанию ---
     default_post_interval_minutes: int = _env_int("POST_INTERVAL_MINUTES", 120)
+
+    # --- Автосбор ---
+    #
+    # Режим реального времени: бот сам обходит источники по расписанию,
+    # шлёт найденное в модерацию, а одобренное уходит в канал и на
+    # витрину. Команды /schedule_on и /schedule_off переключают его на
+    # ходу, но их выбор хранится в базе, а база на хостинге обнуляется
+    # при каждой пересборке. Поэтому состояние по умолчанию задаётся
+    # переменной окружения: включив её один раз, не придётся включать
+    # автосбор заново после каждого деплоя.
+    auto_collect_enabled: bool = _env_bool("AUTO_COLLECT_ENABLED", False)
+    auto_collect_interval_minutes: int = _env_int(
+        "AUTO_COLLECT_INTERVAL_MINUTES", _env_int("POST_INTERVAL_MINUTES", 120)
+    )
     require_moderation_before_publish: bool = True  # на старте — всегда True
 
     # --- Логирование ---

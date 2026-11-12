@@ -553,6 +553,65 @@ def scenario_polling() -> None:
     check("счётчик сбрасывается после ответа", client._idle_timeouts == 0)
 
 
+def scenario_autocollect() -> None:
+    """
+    Режим реального времени: автосбор должен быть включён сразу после
+    деплоя, если так сказано в переменных окружения. База на хостинге
+    обнуляется при каждой пересборке, и состояние, выставленное
+    командой, вместе с ней пропадает.
+    """
+    import max_bot
+    from config import settings
+
+    print()
+    print("--- Автосбор ---")
+
+    import shutil
+    import tempfile
+
+    saved_enabled = settings.auto_collect_enabled
+    saved_interval = settings.auto_collect_interval_minutes
+    saved_db = settings.db_path
+
+    # Чистая база — это и есть состояние после пересборки на хостинге.
+    workdir = tempfile.mkdtemp()
+    settings.db_path = f"{workdir}/bot.db"
+    db.init_db(settings.db_path)
+
+    try:
+        settings.auto_collect_enabled = True
+        settings.auto_collect_interval_minutes = 45
+        state = max_bot._get_scheduler_state()
+        check("переменная включает автосбор без команды",
+              state.get("enabled") is True)
+        check("интервал берётся из переменной",
+              state.get("interval_minutes") == 45, str(state))
+
+        text = max_bot._schedule_status_text()
+        check("статус говорит, что включён", "включён" in text)
+        check("статус показывает интервал", "45 мин" in text, text[:80])
+
+        # Отметка о запуске должна превращаться в «следующий через N».
+        max_bot._mark_scheduler_run()
+        text = max_bot._schedule_status_text()
+        check("статус считает время до следующего обхода",
+              "Следующий: через" in text, text.replace("\n", " | "))
+
+        # Команда /schedule_off должна перебивать переменную.
+        state = max_bot._get_scheduler_state()
+        state["enabled"] = False
+        max_bot._set_scheduler_state(state)
+        check("команда сильнее переменной",
+              max_bot._get_scheduler_state().get("enabled") is False)
+        check("выключенный статус подсказывает команду",
+              "/schedule_on" in max_bot._schedule_status_text())
+    finally:
+        settings.auto_collect_enabled = saved_enabled
+        settings.auto_collect_interval_minutes = saved_interval
+        settings.db_path = saved_db
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def main() -> int:
     db.init_db(settings.db_path)
     db.add_resources_bulk(settings.db_path, build_seed_resources())
@@ -560,7 +619,8 @@ def main() -> int:
     for scenario in (scenario_public, scenario_assistant_offline,
                      scenario_access, scenario_group_silence, scenario_staff,
                      scenario_moderators, scenario_moderation,
-                     scenario_polling):
+                     scenario_polling,
+                     scenario_autocollect):
         try:
             scenario()
         except Exception:

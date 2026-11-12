@@ -708,9 +708,12 @@ MIN_INTERVAL_MINUTES = 10
 
 
 def _get_scheduler_state() -> dict:
+    # Значения по умолчанию берутся из переменных окружения: база на
+    # хостинге обнуляется при пересборке, и без этого автосбор каждый
+    # раз возвращался бы в выключенное состояние.
     return db.get_config(settings.db_path, SCHEDULER_CONFIG_KEY, default={
-        "enabled": False,
-        "interval_minutes": settings.default_post_interval_minutes,
+        "enabled": settings.auto_collect_enabled,
+        "interval_minutes": settings.auto_collect_interval_minutes,
         "last_run_at": None,
     })
 
@@ -723,6 +726,46 @@ def _mark_scheduler_run() -> None:
     state = _get_scheduler_state()
     state["last_run_at"] = datetime.now(timezone.utc).isoformat()
     _set_scheduler_state(state)
+
+
+def _schedule_status_text() -> str:
+    """Состояние автосбора словами: когда был прошлый обход и через
+    сколько ждать следующий. Строка с датой в ISO об этом молчала, а
+    спрашивают именно это."""
+    state = _get_scheduler_state()
+    interval = state.get("interval_minutes",
+                         settings.auto_collect_interval_minutes)
+    enabled = bool(state.get("enabled"))
+
+    last_run = state.get("last_run_at")
+    when_last = "ещё не было"
+    when_next = "при ближайшей проверке"
+    if last_run:
+        try:
+            moment = datetime.fromisoformat(last_run)
+            when_last = moment.astimezone().strftime("%d.%m в %H:%M")
+            left = int(
+                (timedelta(minutes=interval)
+                 - (datetime.now(timezone.utc) - moment)).total_seconds() // 60
+            )
+            when_next = f"через {left} мин" if left > 0 else "вот-вот"
+        except ValueError:
+            when_last = last_run
+
+    lines = [
+        "🕒 <b>Автосбор</b>",
+        "",
+        f"Состояние: {'включён ✅' if enabled else 'выключен ⏸'}",
+        f"Интервал: {interval} мин.",
+        f"Последний обход: {when_last}",
+    ]
+    if enabled:
+        lines.append(f"Следующий: {when_next}")
+    else:
+        lines += ["", "Включить: /schedule_on"]
+    if _collection_lock.locked():
+        lines += ["", "Прямо сейчас идёт сбор."]
+    return "\n".join(lines)
 
 
 def run_collection(notify_chat: int | None = None) -> None:
@@ -911,12 +954,7 @@ def handle_command(update: MaxUpdate, command: str, args: str) -> None:
     if command == "audience":
         _cmd_audience(update); return
     if command == "schedule_status":
-        state = _get_scheduler_state()
-        reply(update,
-              f"🕒 <b>Автосбор</b>\n\n"
-              f"Состояние: {'включён ✅' if state.get('enabled') else 'выключен ⏸'}\n"
-              f"Интервал: {state.get('interval_minutes')} мин.\n"
-              f"Последний запуск: {state.get('last_run_at') or 'ещё не было'}")
+        reply(update, _schedule_status_text())
         return
 
     if not is_admin:
@@ -1524,6 +1562,16 @@ def main() -> None:
     me = bot.get_me()
     logger.info("Бот MAX «%s» (@%s, id=%s) запущен. Версия кода: %s",
                 me.get("name"), me.get("username"), me.get("user_id"), APP_VERSION)
+
+    # Состояние автосбора в журнале при старте: иначе понять, работает
+    # ли режим реального времени, можно только командой из мессенджера.
+    _state = _get_scheduler_state()
+    if _state.get("enabled"):
+        logger.info("Автосбор включён, интервал %s мин.",
+                    _state.get("interval_minutes"))
+    else:
+        logger.info("Автосбор выключен (/schedule_on или "
+                    "AUTO_COLLECT_ENABLED=true).")
 
     threading.Thread(target=scheduler_loop, daemon=True,
                      name="scheduler").start()
