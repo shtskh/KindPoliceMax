@@ -59,14 +59,14 @@ logger = get_logger("image")
 
 # Отсекаем совсем маленькие/битые картинки (иконки, заглушки, "1x1" пиксели).
 MIN_IMAGE_BYTES = 15_000
-# Telegram отклоняет фото больше 10 МБ — пережимаем заранее, чтобы не
+# Мессенджеры отклоняют слишком тяжёлые фото — пережимаем заранее, чтобы не
 # получить 400 уже на этапе публикации.
 MAX_IMAGE_BYTES = 9_000_000
 # Не скачиваем гигантские файлы (баннер-видео, PSD и прочие сюрпризы).
 MAX_DOWNLOAD_BYTES = 25_000_000
-# Ограничения Telegram на пропорции и суммарный размер сторон.
-MAX_TELEGRAM_DIMENSION_SUM = 10_000
-MAX_TELEGRAM_RATIO = 20
+# Ограничения на пропорции и суммарный размер сторон.
+MAX_IMAGE_DIMENSION_SUM = 10_000
+MAX_IMAGE_RATIO = 20
 
 DOWNLOAD_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -217,7 +217,7 @@ def _scene_text(item: NewsItem) -> str:
     Чистый текст новости без разметки и без обязательной подписи канала.
 
     БЫЛ БАГ: сюда попадал item.rewritten_text уже вместе с футером
-    (`​📌 <a href="https://t.me/kindpolice">Мы Вам Доверяем</a> | …`),
+    (`​📌 <a href="https://max.ru/kindpolice">Мы Вам Доверяем</a> | …`),
     потому что orchestrator дописывал подпись ДО вызова этого модуля.
     В результате и промпт генерации, и текст на карточке содержали
     HTML-теги и рекламу канала вместо сути события.
@@ -242,7 +242,8 @@ def _scene_text(item: NewsItem) -> str:
 
 def _try_download(url: str) -> str | None:
     """
-    Скачивает фото из источника и нормализует его под требования Telegram.
+    Скачивает фото из источника и нормализует его под требования
+    мессенджера.
 
     БЫЛ БАГ: имя файла считалось как abs(hash(url)). Встроенный hash()
     для строк рандомизируется при каждом запуске процесса (PYTHONHASHSEED),
@@ -450,7 +451,7 @@ def _sniff_extension(content: bytes) -> str | None:
 def _store_image_bytes(content: bytes, prefix: str) -> str | None:
     """
     Проверяет, что это действительно изображение, при необходимости
-    приводит его к пригодному для Telegram виду и сохраняет на диск.
+    приводит его к пригодному для отправки виду и сохраняет на диск.
     Возвращает путь относительно корня проекта или None.
     """
     if not content:
@@ -471,7 +472,7 @@ def _store_image_bytes(content: bytes, prefix: str) -> str | None:
         logger.info("Неизвестный формат изображения, пропускаю.")
         return None
 
-    content, extension = _normalize_for_telegram(content, extension)
+    content, extension = _normalize_for_messenger(content, extension)
     if content is None:
         return None
 
@@ -487,9 +488,9 @@ def _store_image_bytes(content: bytes, prefix: str) -> str | None:
     return to_relative(path)
 
 
-def _normalize_for_telegram(content: bytes, extension: str) -> tuple[bytes | None, str]:
+def _normalize_for_messenger(content: bytes, extension: str) -> tuple[bytes | None, str]:
     """
-    Приводит картинку к тому, что Telegram точно примет через sendPhoto:
+    Приводит картинку к виду, который мессенджер примет наверняка:
     ≤10 МБ, сумма сторон ≤10000, соотношение сторон ≤20:1, формат
     JPEG/PNG. WebP и слишком большие файлы пережимаются в JPEG.
 
@@ -500,7 +501,7 @@ def _normalize_for_telegram(content: bytes, extension: str) -> tuple[bytes | Non
         from PIL import Image
     except ImportError:
         if len(content) > MAX_IMAGE_BYTES:
-            logger.info("Файл больше лимита Telegram и Pillow недоступен — пропускаю.")
+            logger.info("Файл больше лимита и Pillow недоступен — пропускаю.")
             return None, extension
         return content, extension
 
@@ -518,10 +519,10 @@ def _normalize_for_telegram(content: bytes, extension: str) -> tuple[bytes | Non
             needs_reencode = (
                 image_format not in ("JPEG", "PNG")
                 or len(content) > MAX_IMAGE_BYTES
-                or width + height > MAX_TELEGRAM_DIMENSION_SUM
+                or width + height > MAX_IMAGE_DIMENSION_SUM
             )
 
-            if ratio > MAX_TELEGRAM_RATIO:
+            if ratio > MAX_IMAGE_RATIO:
                 logger.info("Слишком вытянутое изображение (%dx%d), пропускаю.",
                             width, height)
                 return None, extension
@@ -530,8 +531,8 @@ def _normalize_for_telegram(content: bytes, extension: str) -> tuple[bytes | Non
                 return content, extension
 
             converted = image.convert("RGB")
-            if width + height > MAX_TELEGRAM_DIMENSION_SUM:
-                scale = MAX_TELEGRAM_DIMENSION_SUM / (width + height)
+            if width + height > MAX_IMAGE_DIMENSION_SUM:
+                scale = MAX_IMAGE_DIMENSION_SUM / (width + height)
                 converted = converted.resize(
                     (max(1, int(width * scale)), max(1, int(height * scale))),
                     Image.LANCZOS,
@@ -540,14 +541,14 @@ def _normalize_for_telegram(content: bytes, extension: str) -> tuple[bytes | Non
             buffer = io.BytesIO()
             quality = 90
             converted.save(buffer, format="JPEG", quality=quality, optimize=True)
-            # Понижаем качество, пока не уложимся в лимит Telegram.
+            # Понижаем качество, пока не уложимся в лимит.
             while buffer.tell() > MAX_IMAGE_BYTES and quality > 45:
                 quality -= 15
                 buffer = io.BytesIO()
                 converted.save(buffer, format="JPEG", quality=quality, optimize=True)
 
             if buffer.tell() > MAX_IMAGE_BYTES:
-                logger.info("Не удалось ужать изображение до лимита Telegram.")
+                logger.info("Не удалось ужать изображение до нужного размера.")
                 return None, extension
 
             return buffer.getvalue(), ".jpg"
@@ -622,7 +623,7 @@ def generation_status() -> str:
 # Видео
 # --------------------------------------------------------------------------
 
-# Telegram принимает видео до 50 МБ при загрузке файлом. Берём запас:
+# Видео принимается до 50 МБ при загрузке файлом. Берём запас:
 # ролик тяжелее этого почти наверняка длинный репортаж, а не короткая
 # запись спасения, ради которой всё и затевалось.
 MAX_VIDEO_BYTES = 45_000_000

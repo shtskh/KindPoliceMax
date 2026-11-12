@@ -286,7 +286,7 @@ def _render_page(flash: str = "") -> str:
     if not items:
         rendered = (
             '<div class="empty">✨ Очередь пуста — всё обработано.<br>'
-            'Запустите сбор командой /fetch в Telegram-боте.</div>'
+            'Запустите сбор командой /fetch в боте MAX.</div>'
         )
     else:
         rendered = ""
@@ -381,7 +381,7 @@ def approve(item_id: str, _: str = Depends(require_auth)):
         return RedirectResponse(url="/", status_code=303)
 
     # Тот же атомарный «захват», что и в боте: без него модератор в
-    # Telegram и модератор в панели могли опубликовать один пост дважды.
+    # Бот и модератор в панели могли опубликовать один пост дважды.
     if not db.claim_for_moderation(settings.db_path, item_id, NewsStatus.APPROVED):
         logger.info("Новость %s уже обработана — публикация пропущена.", item_id)
         return RedirectResponse(url="/", status_code=303)
