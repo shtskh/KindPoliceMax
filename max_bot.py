@@ -705,6 +705,8 @@ def approve_item(update: MaxUpdate, item_id: str) -> str:
 
 SCHEDULER_CONFIG_KEY = "scheduler"
 MIN_INTERVAL_MINUTES = 10
+# Как часто сообщать в чат модерации о ходе долгого сбора.
+PROGRESS_INTERVAL_SECONDS = 120
 
 
 def _get_scheduler_state() -> dict:
@@ -797,12 +799,32 @@ def run_collection(notify_chat: int | None = None) -> None:
     _collection_started_at = time.time()
     try:
         _mark_scheduler_run()
-        items, stats = run_collection_cycle()
-        for item in items:
+
+        def deliver(item) -> None:
+            """Новость уходит модераторам сразу, как только готова."""
             try:
                 send_to_moderators(item)
             except Exception:
                 logger.exception("Не удалось отправить новость %s", item.id)
+
+        # Признаки жизни во время долгого обхода. Не чаще раза в две
+        # минуты: цикл сообщает о прогрессе на каждой новости, и без
+        # ограничения чат модерации превратился бы в ленту отчётов.
+        last_ping = [time.time()]
+
+        def heartbeat(text: str) -> None:
+            if not notify_chat:
+                return
+            now = time.time()
+            if now - last_ping[0] < PROGRESS_INTERVAL_SECONDS:
+                return
+            last_ping[0] = now
+            try:
+                bot.send_message(chat_id=notify_chat, text=f"⌛ {text}")
+            except Exception:
+                logger.debug("Не удалось отправить сообщение о ходе сбора")
+
+        items, stats = run_collection_cycle(on_item=deliver, progress=heartbeat)
 
         if notify_chat:
             header = ("✅ <b>Сбор завершён</b>" if items
