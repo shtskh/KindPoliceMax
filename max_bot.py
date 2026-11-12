@@ -861,8 +861,17 @@ def handle_command(update: MaxUpdate, command: str, args: str) -> None:
         return
 
     if command == "version":
+        # Состояние витрины здесь не для красоты: если экран не
+        # открывается, первым делом нужно знать, поднялась ли веб-часть
+        # вообще — по логу это видно только при старте.
+        if settings.web_enabled:
+            web = (f"🖥 <b>Витрина:</b> включена, порт {settings.web_port}, "
+                   "адрес /screen")
+        else:
+            web = "🖥 <b>Витрина:</b> выключена (WEB_ENABLED=false)"
         reply(update,
-              f"🏷 <b>Версия кода:</b> {APP_VERSION}\n\n"
+              f"🏷 <b>Версия кода:</b> {APP_VERSION}\n"
+              f"{web}\n\n"
               "<b>Что в этой версии:</b>\n"
               + "\n".join(f"• {line}" for line in CHANGES)
               + "\n\n<i>Если версия старее ожидаемой — хостинг собрал "
