@@ -1,5 +1,5 @@
 """
-Бот «Хороший полицейский» для мессенджера MAX.
+Бот «Мы Вам Доверяем» для мессенджера MAX.
 
 Это самостоятельный бот: он сам собирает новости, сам их модерирует и
 сам публикует в канал MAX. С Telegram-версией он не связан — у каждой
@@ -262,7 +262,7 @@ MENU_BUTTONS = [
 BACK_TO_MENU = [callback_button("⬅️ Меню", "m:home")]
 
 GREETING = (
-    "👮 <b>Хороший полицейский</b>\n\n"
+    "👮 <b>Мы Вам Доверяем</b>\n\n"
     "Здесь собраны истории о том, как сотрудники полиции спасают, "
     "помогают и поддерживают людей.\n\n"
     "<b>А ещё бот поможет разобраться:</b>\n"
@@ -1084,7 +1084,7 @@ def _handle_admin_command(update: MaxUpdate, command: str, args: str) -> None:
             reply(update, "MAX_PUBLISH_CHAT_ID не задан."); return
         sent = bot.send_message(
             chat_id=target,
-            text=args.strip() or "Проверка связи: бот «Хороший полицейский».")
+            text=args.strip() or "Проверка связи: бот «Мы Вам Доверяем».")
         reply(update, "✅ Отправлено в канал." if sent else "❌ Не отправилось.")
         return
 
