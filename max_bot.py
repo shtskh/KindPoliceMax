@@ -64,6 +64,9 @@ _awaiting_question: set[int] = set()
 # Сбор новостей идёт в отдельном потоке, чтобы не вешать опрос событий.
 _worker = ThreadPoolExecutor(max_workers=2, thread_name_prefix="work")
 _collection_lock = threading.Lock()
+# Когда начался текущий сбор — чтобы ответить «идёт N минут»,
+# а не просто «занято».
+_collection_started_at: float | None = None
 
 
 # ==========================================================================
@@ -724,12 +727,31 @@ def _mark_scheduler_run() -> None:
 
 def run_collection(notify_chat: int | None = None) -> None:
     """Сбор идёт в рабочем потоке, чтобы не останавливать опрос событий."""
+    global _collection_started_at
+
     if not _collection_lock.acquire(blocking=False):
         if notify_chat:
-            bot.send_message(chat_id=notify_chat,
-                             text="⏳ Сбор уже выполняется, подождите.")
+            # Сколько уже идёт — важнее самого факта занятости: обход
+            # 81 региональной ленты с догрузкой страниц занимает
+            # минуты, и без этой цифры непонятно, работает бот или
+            # завис, а повторные /fetch выглядят как «не отвечает».
+            started = _collection_started_at
+            if started:
+                minutes = int((time.time() - started) // 60)
+                how_long = (f"идёт {minutes} мин" if minutes
+                            else "начался меньше минуты назад")
+            else:
+                how_long = "уже идёт"
+            bot.send_message(
+                chat_id=notify_chat,
+                text=f"⏳ <b>Сбор {how_long}.</b>\n\n"
+                     "Полный обход занимает несколько минут: лент МВД "
+                     "больше восьмидесяти, и для отобранных новостей "
+                     "догружаются страницы. Результат придёт сюда сам, "
+                     "повторять команду не нужно.")
         return
 
+    _collection_started_at = time.time()
     try:
         _mark_scheduler_run()
         items, stats = run_collection_cycle()
@@ -750,6 +772,7 @@ def run_collection(notify_chat: int | None = None) -> None:
             bot.send_message(chat_id=notify_chat,
                              text=f"❌ Ошибка сбора: {html.escape(str(exc))[:300]}")
     finally:
+        _collection_started_at = None
         _collection_lock.release()
 
 
