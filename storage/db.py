@@ -262,6 +262,20 @@ def _drop_legacy_resources(conn: sqlite3.Connection) -> None:
             cursor.rowcount,
         )
 
+    # Проект работает только через MAX, и каналы в других мессенджерах
+    # из справочника убраны. Записи, попавшие в базу раньше, надо
+    # удалить: справочник живёт в базе, и без этого они остались бы в
+    # меню у всех, кто уже пользовался ботом.
+    cursor = conn.execute(
+        "DELETE FROM public_resources "
+        "WHERE category = 'mvd_telegram' OR url LIKE '%t.me/%'"
+    )
+    if cursor.rowcount:
+        logger.info(
+            "Миграция: из справочника удалено записей Telegram: %d",
+            cursor.rowcount,
+        )
+
 
 # --------------------------------------------------------------------------
 # Отпечаток текста для поиска дубликатов

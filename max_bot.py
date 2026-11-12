@@ -444,13 +444,11 @@ def answer_question(update: MaxUpdate, question: str) -> None:
 # -- справочник источников --------------------------------------------------
 
 _CATEGORY_KEYS = {
-    "tg": ResourceCategory.MVD_TELEGRAM.value,
     "max": ResourceCategory.MVD_MAX.value,
     "edu": ResourceCategory.INSTITUTE.value,
 }
 _CATEGORY_LABELS = {
     ResourceCategory.MVD_MAX.value: "🅼 МВД в MAX",
-    ResourceCategory.MVD_TELEGRAM.value: "📢 МВД в Telegram",
     ResourceCategory.INSTITUTE.value: "🎓 Вузы МВД России",
 }
 REGIONS_PER_PAGE = 8
@@ -463,7 +461,6 @@ def show_resources_home(update: MaxUpdate) -> None:
     rows = [
         [callback_button(_CATEGORY_LABELS[value], f"r:{key}:0")]
         for key, value in (("max", _CATEGORY_KEYS["max"]),
-                           ("tg", _CATEGORY_KEYS["tg"]),
                            ("edu", _CATEGORY_KEYS["edu"]))
     ]
     rows.append(BACK_TO_MENU)
@@ -602,9 +599,8 @@ def set_region(update: MaxUpdate, index: int) -> None:
 
     rows: list[list[dict]] = []
     for category in (ResourceCategory.MVD_MAX.value,
-                     ResourceCategory.MVD_TELEGRAM.value,
                      ResourceCategory.INSTITUTE.value):
-        prefix = {"mvd_max": "🅼", "mvd_telegram": "📢", "institute": "🎓"}[category]
+        prefix = {"mvd_max": "🅼", "institute": "🎓"}[category]
         for resource in db.list_resources(
             settings.db_path, category=category, region=region
         )[:4]:
@@ -1333,6 +1329,10 @@ def _cmd_add_resource(update: MaxUpdate, args: str) -> None:
         reply(update, f"Неизвестная категория «{html.escape(category)}»."); return
     if not url.startswith(("http://", "https://")):
         reply(update, "Ссылка должна начинаться с http:// или https://"); return
+    # Справочник ведёт людей только в MAX и на сайты ведомства.
+    if "t.me/" in url or "telegram.me/" in url:
+        reply(update, "Ссылки на Telegram в справочник не добавляются: "
+                      "проект работает через MAX."); return
 
     db.add_resource(settings.db_path, PublicResource(
         id=uuid.uuid4().hex[:12], category=category, region=region,

@@ -1,10 +1,12 @@
 """
 Справочник официальных источников для публичного меню бота (/resources).
 
-Три категории:
-  * MVD_TELEGRAM — официальные каналы ведомств в Telegram;
-  * MVD_MAX      — официальные каналы МВД в мессенджере MAX;
-  * INSTITUTE    — образовательные организации системы МВД России.
+Две категории:
+  * MVD_MAX   — официальные каналы МВД в мессенджере MAX;
+  * INSTITUTE — образовательные организации системы МВД России.
+
+Проект работает только через MAX, поэтому каналов в других
+мессенджерах в справочнике нет.
 
 КАК СОБИРАЛИСЬ ДАННЫЕ
 ---------------------
@@ -35,22 +37,6 @@ from storage.models import PublicResource, ResourceCategory
 # 1. Telegram: федеральные каналы ведомств
 # --------------------------------------------------------------------------
 # (username, отображаемое название)
-# @rumvd сознательно отсутствует — в config.py он помечен как
-# НЕОФИЦИАЛЬНЫЙ, показывать его населению как официальный источник нельзя.
-
-TELEGRAM_FEDERAL: tuple[tuple[str, str], ...] = (
-    ("mediamvd", "МВД России · МВД МЕДИА"),
-    ("IrinaVolk_MVD", "Ирина Волк — официальный представитель МВД"),
-    ("gibdd", "Госавтоинспекция МВД России"),
-    ("cyberpolice_rus", "Вестник Киберполиции России"),
-    ("migrpost", "Миграционный пост (вопросы миграции)"),
-    ("mospolice", "Полиция Москвы"),
-    ("genprocrf", "Генеральная прокуратура РФ"),
-    ("sledcom_press", "Следственный комитет РФ"),
-    ("rosgvardia_ru", "Росгвардия"),
-)
-
-
 # --------------------------------------------------------------------------
 # 2. MAX: каналы МВД
 # --------------------------------------------------------------------------
@@ -246,15 +232,6 @@ def build_seed_resources() -> list[PublicResource]:
     """
     resources: list[PublicResource] = []
 
-    for username, name in TELEGRAM_FEDERAL:
-        resources.append(PublicResource(
-            id=f"tg_{username}",
-            category=ResourceCategory.MVD_TELEGRAM.value,
-            region=None,
-            name=name,
-            url=f"https://t.me/{username}",
-        ))
-
     for handle, name in MAX_FEDERAL:
         resources.append(PublicResource(
             id=f"max_{handle}",
@@ -288,7 +265,6 @@ def build_seed_resources() -> list[PublicResource]:
 def seed_counts() -> dict[str, int]:
     """Сколько записей в каждой категории — для /diag и README."""
     return {
-        ResourceCategory.MVD_TELEGRAM.value: len(TELEGRAM_FEDERAL),
         ResourceCategory.MVD_MAX.value: len(MAX_FEDERAL) + len(MAX_REGIONAL),
         ResourceCategory.INSTITUTE.value: len(INSTITUTES) + len(INSTITUTE_BRANCHES),
     }

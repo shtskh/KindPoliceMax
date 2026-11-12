@@ -100,7 +100,6 @@ class BotUser:
 
 class ResourceCategory(str, Enum):
     """Категории официальных источников для публичного меню бота."""
-    MVD_TELEGRAM = "mvd_telegram"
     MVD_MAX = "mvd_max"
     INSTITUTE = "institute"  # учебные заведения МВД по регионам
 
