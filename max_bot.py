@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import html
+import re
 import sys
 import threading
 import time
@@ -1362,6 +1363,53 @@ def _do_broadcast(update: MaxUpdate, text: str) -> None:
 # Разбор событий
 # ==========================================================================
 
+def _show_decision(update: MaxUpdate, item_id: str, result: str) -> None:
+    """
+    Показать модератору, что кнопка сработала.
+
+    Раньше единственным признаком было всплывающее уведомление от
+    answer_callback. В MAX оно либо не показывается, либо исчезает
+    мгновенно: карточка оставалась на месте вместе с кнопками, и
+    отклонение выглядело так, будто ничего не произошло.
+
+    Поэтому убираем кнопки у карточки — так видно, что решение
+    принято, и повторно нажать уже нельзя. Если заменить сообщение не
+    вышло (например, карточка со снимком), пишем отдельной строкой в
+    чат: лучше лишняя строка, чем немое нажатие.
+    """
+    icons = {"Опубликовано": "✅", "Отклонено": "❌"}
+    icon = icons.get(result, "ℹ️")
+    who = db.get_audience_name(settings.db_path, update.user_id or 0) or ""
+    line = f"{icon} <b>{html.escape(result)}</b>"
+    if who:
+        line += f" · {html.escape(who)}"
+
+    item = db.get_by_id(settings.db_path, item_id)
+    headline = ""
+    if item:
+        text = (item.rewritten_text or item.title or "").strip()
+        if FOOTER_MARKER in text:
+            text = text.split(FOOTER_MARKER, 1)[0]
+        headline = _trim_plain(text, 300)
+
+    full = line + ("\n\n" + headline if headline else "")
+
+    replaced = False
+    if update.callback_id:
+        replaced = bot.answer_callback(
+            update.callback_id, text=full, buttons=[]
+        )
+    if not replaced and update.chat_id:
+        bot.send_message(chat_id=update.chat_id, text=full)
+
+
+def _trim_plain(text: str, limit: int) -> str:
+    """Текст без разметки и в пределах длины — для строки о решении."""
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
 def handle_callback(update: MaxUpdate) -> None:
     payload = update.payload or ""
     _track(update)
@@ -1378,11 +1426,15 @@ def handle_callback(update: MaxUpdate) -> None:
 
         action, item_id = payload[0], payload[2:]
         if action == "a":
-            ack(approve_item(update, item_id))
+            result = approve_item(update, item_id)
+            ack(result)
+            _show_decision(update, item_id, result)
         elif action == "x":
             claimed = db.claim_for_moderation(
                 settings.db_path, item_id, NewsStatus.REJECTED, update.user_id)
-            ack("Отклонено" if claimed else "Уже обработана")
+            result = "Отклонено" if claimed else "Уже обработана"
+            ack(result)
+            _show_decision(update, item_id, result)
         else:
             ack("Рисую новую картинку…")
             item = db.get_by_id(settings.db_path, item_id)

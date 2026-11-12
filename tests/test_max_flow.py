@@ -82,7 +82,8 @@ class RecordingBot:
     def answer_callback(self, callback_id, *, notification=None,
                         text=None, buttons=None):
         self.answers.append({"callback_id": callback_id,
-                             "notification": notification})
+                             "notification": notification,
+                             "text": text, "buttons": buttons})
         return True
 
     def get_chat_members(self, chat_id, limit: int = 100) -> list[dict]:
@@ -479,6 +480,45 @@ def scenario_moderation() -> None:
     press(f"a:{item.id}")
     check("повторная публикация не произошла",
           not [m for m in recorder.sent if m["chat_id"] == 888])
+
+    # --- отклонение должно быть видно ---
+    #
+    # Всплывающее уведомление в MAX либо не показывается, либо
+    # исчезает мгновенно: карточка оставалась с кнопками, и нажатие
+    # выглядело как «ничего не произошло».
+    second = NewsItem(
+        id="22222222-2222-2222-2222-222222222222",
+        source_name="МВД: Республика Ингушетия",
+        source_url="https://06.xn--b1aew.xn--p1ai/news/2",
+        title="Инспекторы ДПС спасли девочку",
+        raw_text="Инспекторы доставили ребёнка в больницу.",
+        published_at=datetime.now(timezone.utc),
+        status=NewsStatus.PENDING_MODERATION,
+        region="Республика Ингушетия",
+        rewritten_text="Инспекторы ДПС спасли <b>шестимесячную девочку</b>.",
+    )
+    db.save_item(settings.db_path, second)
+
+    recorder.clear()
+    press(f"x:{second.id}")
+
+    stored = db.get_by_id(settings.db_path, second.id)
+    check("новость отклонена", stored.status == NewsStatus.REJECTED,
+          stored.status.value)
+
+    answer = recorder.answers[-1] if recorder.answers else {}
+    check("модератор видит результат",
+          bool(answer.get("text")) and "Отклонено" in (answer.get("text") or ""),
+          str(answer))
+    check("кнопки с карточки убраны", answer.get("buttons") == [],
+          str(answer.get("buttons")))
+    check("в ответе виден текст новости",
+          "девочку" in (answer.get("text") or "").lower(),
+          str(answer.get("text"))[:120])
+    # Выделение из самой новости в коротком отчёте ни к чему: жирным
+    # там только слово «Отклонено».
+    body = (answer.get("text") or "").split("\n\n", 1)[-1]
+    check("текст новости в отчёте без разметки", "<" not in body, body[:120])
 
 
 def scenario_polling() -> None:
