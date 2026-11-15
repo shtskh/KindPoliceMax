@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+import re
 import shutil
 import tempfile
 import traceback
@@ -1242,9 +1243,16 @@ def test_screen() -> None:
                   and "-webkit-text-stroke" in branded)
         finally:
             settings.channel_title = saved_title
+        # Шрифт вшит в страницу как data-URI, и в его base64 случайно
+        # встречаются любые буквосочетания — проверять надо разметку,
+        # а не двоичные данные.
+        markup = re.sub(r"data:font/woff2;base64,[A-Za-z0-9+/=]+", "", page.text)
         check("страница самодостаточна: без внешних загрузок",
-              "http://" not in page.text.replace("http://www.w3.org", "")
-              and "cdn" not in page.text.lower())
+              "http://" not in markup.replace("http://www.w3.org", "")
+              and "https://" not in markup
+              and "cdn" not in markup.lower(), markup[:0])
+        check("шрифт вшит в страницу, а не подгружается",
+              "@font-face" in page.text and "data:font/woff2;base64," in page.text)
         check("интервал подставлен в страницу",
               f'"interval": {settings.screen_interval_seconds}' in page.text
               or f'"interval":{settings.screen_interval_seconds}' in page.text)
