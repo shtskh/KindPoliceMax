@@ -1241,6 +1241,7 @@ def _cmd_stats(update: MaxUpdate) -> None:
     labels = {
         "negative_marker": "негатив о сотруднике",
         "off_format": "не тот формат", "too_short": "короткий текст",
+        "blood_drive": "донорская акция",
         "routine": "служебная рутина", "not_positive": "не позитивная",
         "not_authentic": "сомнительная достоверность",
         "archived": "архивировано вручную", "llm_or_legacy": "решение ИИ",
