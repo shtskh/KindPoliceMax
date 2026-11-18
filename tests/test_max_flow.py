@@ -652,6 +652,73 @@ def scenario_autocollect() -> None:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def scenario_roles_persist() -> None:
+    """
+    Роли модераторов должны переживать пересборку контейнера.
+
+    База на хостинге создаётся заново при каждом обновлении, и права,
+    выданные кнопкой, жили до ближайшего деплоя — человек оставался
+    без доступа через день. Переменная MAX_MODERATOR_IDS возвращает
+    роль на старте, как у администраторов.
+    """
+    import shutil
+    import tempfile
+
+    import max_bot
+    from config import settings
+    from storage.models import UserRole
+
+    print()
+    print("--- Постоянные роли ---")
+
+    saved_db = settings.db_path
+    saved_mods = list(settings.bot_moderator_ids)
+    saved_admins = list(settings.bot_admin_ids)
+    workdir = tempfile.mkdtemp()
+    settings.db_path = f"{workdir}/roles.db"
+    settings.bot_admin_ids = [111]
+    settings.bot_moderator_ids = [222, 333]
+    db.init_db(settings.db_path)
+
+    try:
+        max_bot.bootstrap_admins()
+        roles = {u.telegram_id: u.role for u in db.list_users(settings.db_path)}
+        check("администратор восстановлен",
+              roles.get(111) == UserRole.ADMIN, str(roles))
+        check("модераторы восстановлены на чистой базе",
+              roles.get(222) == UserRole.MODERATOR
+              and roles.get(333) == UserRole.MODERATOR, str(roles))
+
+        # Пересборка = чистая база. Роли должны вернуться сами.
+        shutil.rmtree(workdir, ignore_errors=True)
+        db.init_db(settings.db_path)
+        check("после пересборки ролей нет",
+              not db.list_users(settings.db_path))
+        max_bot.bootstrap_admins()
+        again = {u.telegram_id: u.role for u in db.list_users(settings.db_path)}
+        check("роли вернулись после пересборки",
+              again.get(222) == UserRole.MODERATOR, str(again))
+
+        # Администратора нельзя понизить до модератора переменной.
+        settings.bot_moderator_ids = [111]
+        max_bot.bootstrap_admins()
+        after = {u.telegram_id: u.role for u in db.list_users(settings.db_path)}
+        check("администратор не понижается",
+              after.get(111) == UserRole.ADMIN, str(after))
+
+        # Кнопкой такую роль не снять: она вернулась бы при перезапуске.
+        settings.bot_moderator_ids = [222]
+        answer = max_bot._remove_moderator(
+            type("U", (), {"user_id": 111})(), 222)
+        check("снятие постоянной роли объясняется",
+              "MAX_MODERATOR_IDS" in answer, answer)
+    finally:
+        settings.db_path = saved_db
+        settings.bot_moderator_ids = saved_mods
+        settings.bot_admin_ids = saved_admins
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def main() -> int:
     db.init_db(settings.db_path)
     db.add_resources_bulk(settings.db_path, build_seed_resources())
@@ -660,7 +727,7 @@ def main() -> int:
                      scenario_access, scenario_group_silence, scenario_staff,
                      scenario_moderators, scenario_moderation,
                      scenario_polling,
-                     scenario_autocollect):
+                     scenario_autocollect, scenario_roles_persist):
         try:
             scenario()
         except Exception:

@@ -195,7 +195,48 @@ class Settings:
                 "55", "56", "57", "58", "59", "60", "61", "62", "63", "64",
                 "65", "66", "67", "68", "69", "70", "71", "72", "73", "74",
                 "75", "76", "77", "78", "79", "82", "83", "86", "87", "89",
-                "92",
+                "92", "95",
+            ],
+        )
+    )
+
+    # --- Источники: образовательные организации системы МВД ---
+    #
+    # У сайтов вузов МВД тот же движок, что и у территориальных
+    # органов, но лента лежит по другому адресу: сайт объявляет её в
+    # разметке главной страницы (/Press-sluzhba/Novosti/rss/). Через
+    # /news/rss, как у управлений, она недоступна — поэтому раньше эти
+    # сайты не использовались вовсе.
+    #
+    # Истории курсантов и преподавателей — ровно та тематика, ради
+    # которой канал и существует: помощь прохожим, донорство костного
+    # мозга, спасение на воде вне службы. Проверено: 21 лента отвечает,
+    # по 20 записей в каждой.
+    mvd_edu_rss_enabled: bool = _env_bool("MVD_EDU_RSS_ENABLED", True)
+
+    mvd_edu_feeds: list[str] = field(
+        default_factory=lambda: _parse_str_list(
+            os.getenv("MVD_EDU_FEEDS", ""),
+            [
+                "https://а.мвд.рф/Universitet/Novosti/rss/",
+                "https://белюи.мвд.рф/Press-sluzhba/Novosti/rss/",
+                "https://бюи.мвд.рф/press/news/rss/",
+                "https://ва.мвд.рф/Press-sluzhba/Novosti/rss/",
+                "https://ви.мвд.рф/Press-sluzhba/Novosti/rss/",
+                "https://випк.мвд.рф/Press-sluzhba/Novosti/rss/",
+                "https://вси.мвд.рф/Press-sluzhba/Novosti/rss/",
+                "https://двюи.мвд.рф/Press-sluzhba/Novosti/rss/",
+                "https://крду.мвд.рф/Press-sluzhba/Novosti/rss/",
+                "https://кюи.мвд.рф/Press-sluzhba/Novosti/rss/",
+                "https://мосу.мвд.рф/Press-sluzhba/Novosti/rss/",
+                "https://на.мвд.рф/Press-sluzhba/Novosti/rss/",
+                "https://орюи.мвд.рф/Press-sluzhba/Novosti/rss/",
+                "https://рюи.мвд.рф/пресс-служба/новости/rss/",
+                "https://сибюи.мвд.рф/Press-sluzhba/Novosti/rss/",
+                "https://типк.мвд.рф/Press-sluzhba/Novosti/rss/",
+                "https://университет.мвд.рф/Press-sluzhba/Novosti/rss/",
+                "https://урюи.мвд.рф/Press-sluzhba/Novosti/rss/",
+                "https://уюи.мвд.рф/Press-sluzhba/Novosti/rss/",
             ],
         )
     )
@@ -208,6 +249,7 @@ class Settings:
             os.getenv("RSS_SOURCES", ""),
             [
                 "https://мвд.рф/news/rss",                        # МВД России
+                "https://mvdmedia.ru/rss/",                       # МВД Медиа (официальное медиа ведомства)
                 "https://ria.ru/export/rss2/archive/index.xml",   # РИА Новости
                 "https://tass.ru/rss/v2.xml",                     # ТАСС
                 "https://rg.ru/xml/index.xml",                    # Российская газета
@@ -274,6 +316,17 @@ class Settings:
     # --- Доступ к боту (роли) ---
     # Идентификаторы людей, которые при первом запуске бота автоматически
     # получат роль admin. Узнать свой можно командой /whoami в этом боте.
+    # Модераторы, которым роль возвращается при каждом запуске.
+    #
+    # Роли хранятся в базе, а база на хостинге пересоздаётся при каждой
+    # пересборке контейнера — права, выданные командой, пропадали через
+    # день-два, и человек оставался без доступа. Идентификаторы в этой
+    # переменной переживают пересборку: роль восстанавливается на
+    # старте так же, как у администраторов.
+    bot_moderator_ids: list[int] = field(
+        default_factory=lambda: _parse_id_list(os.getenv("MAX_MODERATOR_IDS", ""))
+    )
+
     bot_admin_ids: list[int] = field(
         default_factory=lambda: _parse_id_list(os.getenv("MAX_ADMIN_IDS", ""))
     )

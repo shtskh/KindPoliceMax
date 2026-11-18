@@ -88,7 +88,15 @@ def has_role(user_id: int | None, minimum: UserRole) -> bool:
 
 
 def bootstrap_admins() -> None:
-    """Выдаёт роль admin всем, кто указан в MAX_ADMIN_IDS."""
+    """
+    Возвращает роли, заданные переменными окружения.
+
+    Роли хранятся в базе, а база на хостинге пересоздаётся при каждой
+    пересборке контейнера. Администраторы восстанавливались всегда, а
+    модераторы — нет: человеку выдавали права, через день контейнер
+    пересобирался, и доступ пропадал. Теперь обе роли восстанавливаются
+    одинаково.
+    """
     for admin_id in settings.bot_admin_ids:
         existing = db.get_user(settings.db_path, admin_id)
         if existing is None or existing.role != UserRole.ADMIN:
@@ -102,6 +110,23 @@ def bootstrap_admins() -> None:
                 ),
             )
             logger.info("Администратор из MAX_ADMIN_IDS: %s", admin_id)
+
+    for moderator_id in settings.bot_moderator_ids:
+        if moderator_id in settings.bot_admin_ids:
+            # Администратор и так всё может — понижать его нельзя.
+            continue
+        existing = db.get_user(settings.db_path, moderator_id)
+        if existing is None or existing.role != UserRole.MODERATOR:
+            db.upsert_user(
+                settings.db_path,
+                BotUser(
+                    telegram_id=moderator_id,
+                    role=UserRole.MODERATOR,
+                    username=existing.username if existing else None,
+                    full_name=existing.full_name if existing else None,
+                ),
+            )
+            logger.info("Модератор из MAX_MODERATOR_IDS: %s", moderator_id)
 
 
 def seed_public_resources(update_existing: bool = False) -> int:
@@ -1184,6 +1209,10 @@ def _remove_moderator(update: MaxUpdate, user_id: int) -> str:
     if user_id in settings.bot_admin_ids:
         return "⛔ Этот администратор задан в MAX_ADMIN_IDS — снимите его там."
 
+    if user_id in settings.bot_moderator_ids:
+        # Иначе роль «снялась бы» лишь до ближайшего перезапуска.
+        return "⛔ Этот модератор задан в MAX_MODERATOR_IDS — снимите его там."
+
     if user_id == update.user_id:
         return "⛔ Нельзя снять роль с самого себя."
 
@@ -1207,7 +1236,12 @@ def _show_moderators(update: MaxUpdate, with_remove_buttons: bool = False) -> No
 
     for user in users:
         icon = "👑" if user.role == UserRole.ADMIN else "🛡"
-        fixed = " · из MAX_ADMIN_IDS" if user.telegram_id in settings.bot_admin_ids else ""
+        if user.telegram_id in settings.bot_admin_ids:
+            fixed = " · из MAX_ADMIN_IDS"
+        elif user.telegram_id in settings.bot_moderator_ids:
+            fixed = " · из MAX_MODERATOR_IDS"
+        else:
+            fixed = " · только в базе"
         lines.append(
             f"{icon} {html.escape(_display_name(user))} — "
             f"<code>{user.telegram_id}</code>{fixed}"
@@ -1215,10 +1249,29 @@ def _show_moderators(update: MaxUpdate, with_remove_buttons: bool = False) -> No
         # Снимать можно только модераторов: администратора из переменной
         # окружения кнопкой не убрать, и показывать такую кнопку нечестно.
         if (with_remove_buttons and user.role == UserRole.MODERATOR
-                and user.telegram_id not in settings.bot_admin_ids):
+                and user.telegram_id not in settings.bot_admin_ids
+                and user.telegram_id not in settings.bot_moderator_ids):
             rows.append([callback_button(
                 f"❌ Снять: {_display_name(user)[:24]}", f"mod:del:{user.telegram_id}"
             )])
+
+    # Роли живут в базе, а база на хостинге пересоздаётся при
+    # каждой пересборке. Пока модератор не вписан в переменную
+    # окружения, его права исчезнут при ближайшем обновлении —
+    # сказать об этом нужно сразу, а не ждать, пока человек
+    # останется без доступа.
+    only_db = [u for u in users
+               if u.role == UserRole.MODERATOR
+               and u.telegram_id not in settings.bot_moderator_ids
+               and u.telegram_id not in settings.bot_admin_ids]
+    if only_db:
+        ids = ",".join(str(u.telegram_id) for u in only_db)
+        lines.append(
+            "\n⚠️ Права, выданные кнопкой, хранятся только в базе "
+            "и пропадут при следующей пересборке бота. Чтобы они "
+            "сохранялись, добавьте на хостинге переменную "
+            f"<code>MAX_MODERATOR_IDS={ids}</code>"
+        )
 
     rows.append([callback_button("➕ Добавить модератора", "mod:pick")])
     reply(update, "\n".join(lines), rows)
