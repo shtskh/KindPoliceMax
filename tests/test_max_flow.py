@@ -243,7 +243,8 @@ def scenario_public() -> None:
     press("m:news")
     check("новости отвечают", bool(recorder.sent))
     press("m:edu")
-    check("учёба отвечает", "вуз" in recorder.all_text.lower())
+    check("учёба отвечает",
+          "образовательны" in recorder.all_text.lower())
     press("m:about")
     check("о проекте отвечает", "проект" in recorder.all_text.lower())
     check_outgoing("о проекте")
