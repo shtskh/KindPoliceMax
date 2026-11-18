@@ -277,9 +277,9 @@ MENU_BUTTONS = [
     [callback_button("🆘 Что делать, если…", "m:sit"),
      callback_button("☎️ Телефоны", "m:ph")],
     [callback_button("💬 Задать вопрос", "m:ask"),
-     callback_button("🏛 Источники МВД", "m:res")],
+     callback_button("🏛 Источники МВД России", "m:res")],
     [callback_button("📰 Хорошие новости", "m:news"),
-     callback_button("🎓 Учёба в МВД", "m:edu")],
+     callback_button("🎓 Учёба в МВД России", "m:edu")],
     [callback_button("📍 Мой регион", "m:reg"),
      callback_button("ℹ️ О проекте", "m:about")],
 ]
@@ -294,8 +294,8 @@ GREETING = (
     "🆘 памятки «что делать, если…» — кража, ДТП, мошенники, пропал человек\n"
     "☎️ телефоны экстренных служб\n"
     "💬 вопрос своими словами — подскажу, куда идти и какие у вас права\n"
-    "🏛 официальные каналы МВД по всем регионам\n"
-    "🎓 как поступить в вуз МВД\n\n"
+    "🏛 официальные каналы МВД России по всем регионам\n"
+    "🎓 как поступить в вуз МВД России\n\n"
     "Выберите раздел:"
 )
 
@@ -305,9 +305,9 @@ PUBLIC_HELP = (
     "/situations — что делать, если…\n"
     "/phones — экстренные телефоны\n"
     "/ask — задать вопрос помощнику\n"
-    "/resources — официальные источники МВД\n"
+    "/resources — официальные источники МВД России\n"
     "/news — хорошие новости\n"
-    "/education — учёба в МВД\n"
+    "/education — учёба в МВД России\n"
     "/region — выбрать свой регион\n"
     "/about — о проекте\n"
     "/whoami — ваш идентификатор и роль\n\n"
@@ -473,7 +473,7 @@ _CATEGORY_KEYS = {
     "edu": ResourceCategory.INSTITUTE.value,
 }
 _CATEGORY_LABELS = {
-    ResourceCategory.MVD_MAX.value: "🅼 МВД в MAX",
+    ResourceCategory.MVD_MAX.value: "🅼 МВД России в MAX",
     ResourceCategory.INSTITUTE.value: "🎓 Вузы МВД России",
 }
 REGIONS_PER_PAGE = 8
@@ -609,7 +609,7 @@ def show_region_picker(update: MaxUpdate, page: int = 0) -> None:
     text = "📍 <b>Ваш регион</b>\n\n"
     if current:
         text += f"Сейчас выбран: <b>{html.escape(current)}</b>\n\n"
-    text += ("Регион нужен, чтобы показывать каналы местного управления МВД "
+    text += ("Регион нужен, чтобы показывать каналы местного управления МВД России "
              "и новости вашего края в первую очередь.\n\nВыберите регион:")
     reply(update, text, region_keyboard(page))
 
@@ -811,7 +811,7 @@ def run_collection(notify_chat: int | None = None) -> None:
             bot.send_message(
                 chat_id=notify_chat,
                 text=f"⏳ <b>Сбор {how_long}.</b>\n\n"
-                     "Полный обход занимает несколько минут: лент МВД "
+                     "Полный обход занимает несколько минут: лент МВД России "
                      "больше восьмидесяти, и для отобранных новостей "
                      "догружаются страницы. Результат придёт сюда сам, "
                      "повторять команду не нужно.")
