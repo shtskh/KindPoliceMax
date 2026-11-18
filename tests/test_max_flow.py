@@ -20,6 +20,12 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# В названиях кнопок есть эмодзи, а консоль Windows по умолчанию
+# работает в cp1251: без этого печать падает с UnicodeEncodeError
+# и сценарий обрывается на середине, хотя сам бот исправен.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 _TMP_DB = os.path.join(tempfile.gettempdir(), "kindpolice_max_flow.db")
 for suffix in ("", "-wal", "-shm"):
     try:
@@ -276,13 +282,29 @@ def scenario_access() -> None:
         check(f"{command} закрыт для обычного пользователя",
               "нет доступа" in recorder.all_text.lower(),
               recorder.all_text[:60])
+    check("в отказе назван ID пользователя", str(USER_ID) in recorder.all_text,
+          recorder.all_text[:80])
 
     # Кнопки модерации тоже недоступны: нажатие от постороннего
     # не должно ничего публиковать.
+    max_bot._NO_ACCESS_HINT.clear()
     press("a:00000000-0000-0000-0000-000000000000")
     check("кнопка «Опубликовать» закрыта для постороннего",
           any(a["notification"] == "Нет доступа" for a in recorder.answers))
-    check("ничего не опубликовано", not recorder.sent)
+
+    # Всплывающего уведомления мало: администратор должен увидеть в
+    # чате настоящий ID нажавшего, иначе он угадывает его наугад.
+    check("в чат пришёл ID нажавшего", str(USER_ID) in recorder.all_text,
+          recorder.all_text[:80])
+    check("есть кнопка назначения",
+          f"mod:add:{USER_ID}" in recorder.payloads(), str(recorder.payloads()))
+    check("ничего не опубликовано",
+          all("Опубликовано" not in m["text"] for m in recorder.sent))
+
+    # Повторные нажатия не должны засыпать чат одинаковыми подсказками.
+    press("a:00000000-0000-0000-0000-000000000000")
+    check("подсказка не повторяется", not recorder.sent, recorder.all_text[:60])
+    max_bot._NO_ACCESS_HINT.clear()
 
 
 def scenario_group_silence() -> None:
@@ -713,6 +735,24 @@ def scenario_roles_persist() -> None:
             type("U", (), {"user_id": 111})(), 222)
         check("снятие постоянной роли объясняется",
               "MAX_MODERATOR_IDS" in answer, answer)
+
+        # Роль, выданная незнакомому номеру, — почти всегда опечатка в
+        # идентификаторе. Молча соглашаться нельзя: человек будет
+        # уверен, что доступ есть, а кнопки продолжат отказывать.
+        recorder.members = []
+        granted = max_bot._grant_moderator(
+            type("U", (), {"user_id": 111, "chat_id": None})(), 777000111)
+        check("назначение незнакомому ID предупреждает",
+              "/whoami" in granted, granted)
+
+        # Тот же номер, но человек уже обращался к боту: предупреждать
+        # не о чем.
+        db.touch_audience_user(settings.db_path, telegram_id=777000222,
+                               full_name="Известный")
+        granted = max_bot._grant_moderator(
+            type("U", (), {"user_id": 111, "chat_id": None})(), 777000222)
+        check("назначение известному ID без предупреждения",
+              "/whoami" not in granted, granted)
     finally:
         settings.db_path = saved_db
         settings.bot_moderator_ids = saved_mods

@@ -949,6 +949,8 @@ def handle_command(update: MaxUpdate, command: str, args: str) -> None:
     if not is_moderator:
         reply(update,
               "⛔ У вас нет доступа к этой команде.\n\n"
+              f"🆔 Ваш ID в MAX: <code>{user_id}</code> — передайте "
+              "его администратору, чтобы он выдал права.\n\n"
               "Доступные разделы — в меню.", [BACK_TO_MENU])
         return
 
@@ -1203,6 +1205,14 @@ def _grant_moderator(update: MaxUpdate, user_id: int, name: str | None = None) -
         added_by=update.user_id,
     ))
     logger.info("Модератором назначен %s (%s)", user_id, name)
+    if name is None and db.get_audience_name(settings.db_path, user_id) is None:
+        # Роль выдана номеру, которого бот никогда не видел. Чаще
+        # всего это опечатка или чужой идентификатор: человек будет
+        # уверен, что доступ есть, а кнопки продолжат отказывать.
+        return (f"⚠️ Роль выдана ID <code>{user_id}</code>, но человек с таким\n"
+                "идентификатором ни разу не обращался к боту. Скорее всего\n"
+                "ID неверный: пусть он напишет боту /whoami и пришлёт\n"
+                "номер оттуда.")
     return f"✅ {name or user_id} назначен модератором."
 
 
@@ -1361,6 +1371,19 @@ def _cmd_diag(update: MaxUpdate) -> None:
         f"📡 Источников: RSS {len(settings.rss_sources)}, "
         f"Telegram-каналов {len(settings.telegram_channels)}",
     ]
+    lines += ["", "<b>Роли из переменных окружения</b>"]
+    if settings.bot_admin_ids or settings.bot_moderator_ids:
+        pairs = ([("👑", uid) for uid in settings.bot_admin_ids]
+                 + [("🛡", uid) for uid in settings.bot_moderator_ids])
+        for icon, uid in pairs:
+            # Если бот никогда не видел этот номер, роль выдана в
+            # пустоту: именно так выглядит опечатка в переменной.
+            seen = db.get_audience_name(settings.db_path, uid)
+            mark = (html.escape(seen) if seen
+                    else "⚠️ не обращался к боту, проверьте ID")
+            lines.append(f"{icon} <code>{uid}</code> — {mark}")
+    else:
+        lines.append("⚠️ MAX_ADMIN_IDS и MAX_MODERATOR_IDS пусты")
     if missing:
         lines.append("\n⚠️ <b>Не задано:</b>")
         lines += [f"   • {html.escape(m)}" for m in missing]
@@ -1464,11 +1487,56 @@ def _trim_plain(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
+# Когда прав нет, всплывающего «Нет доступа» мало: ни нажавший, ни
+# администратор не узнают, в чём дело. Идентификатор пользователя в MAX
+# нигде не виден, поэтому его приходится угадывать — и права уходят не
+# тому. Пишем идентификатор прямо в чат и даём кнопку назначения.
+_NO_ACCESS_HINT: dict[tuple[int | None, int | None], float] = {}
+_NO_ACCESS_HINT_INTERVAL = 600.0
+
+
+def _report_no_access(update: MaxUpdate) -> None:
+    """Сообщает в чат, кто нажал кнопку, с его настоящим ID."""
+    if update.user_id is None:
+        return
+    key = (update.chat_id, update.user_id)
+    now = time.monotonic()
+    last = _NO_ACCESS_HINT.get(key)
+    if last is not None and now - last < _NO_ACCESS_HINT_INTERVAL:
+        return
+    _NO_ACCESS_HINT[key] = now
+
+    name = (update.user_name
+            or db.get_audience_name(settings.db_path, update.user_id)
+            or f"ID {update.user_id}")
+    text = (
+        f"⛔ У {html.escape(name)} нет прав модератора.\n\n"
+        f"🆔 Настоящий ID в MAX: <code>{update.user_id}</code>\n\n"
+        "Администратор выдаёт доступ кнопкой ниже или командой "
+        f"<code>/add_moderator {update.user_id}</code>."
+    )
+    if update.chat_id is None:
+        bot.send_message(user_id=update.user_id, text=text)
+        return
+    bot.send_message(
+        chat_id=update.chat_id,
+        text=text,
+        buttons=[[callback_button(
+            f"➕ Назначить модератором: {name[:20]}",
+            f"mod:add:{update.user_id}",
+        )]],
+    )
+
+
 def handle_callback(update: MaxUpdate) -> None:
     payload = update.payload or ""
     _track(update)
 
     def ack(notification: str | None = None) -> None:
+        # Всплывающее уведомление разметку не понимает: теги в нём
+        # видны как есть, поэтому показываем только текст.
+        if notification:
+            notification = _trim_plain(notification, 200)
         if update.callback_id:
             bot.answer_callback(update.callback_id, notification=notification)
 
@@ -1476,6 +1544,7 @@ def handle_callback(update: MaxUpdate) -> None:
     if payload[:2] in ("a:", "x:", "i:"):
         if not has_role(update.user_id, UserRole.MODERATOR):
             ack("Нет доступа")
+            _report_no_access(update)
             return
 
         action, item_id = payload[0], payload[2:]
