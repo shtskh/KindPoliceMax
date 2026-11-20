@@ -371,6 +371,12 @@ class Settings:
     # его, а WEB_PORT оставляем для ручной настройки.
     web_port: int = _env_int("WEB_PORT", _env_int("PORT", 8000))
     web_host: str = os.getenv("WEB_HOST", "0.0.0.0")
+    # Внешний адрес, по которому витрина открывается из интернета.
+    # Самому серверу он не нужен — это подсказка для людей: по команде
+    # /screen бот показывает готовую ссылку, которую можно открыть на
+    # телевизоре или отправить коллеге. Пусто — бот объяснит, из чего
+    # адрес складывается.
+    web_public_url_raw: str = os.getenv("WEB_PUBLIC_URL", "")
 
     # --- Обязательная подпись в конце каждого опубликованного поста ---
     # Юзернеймы БЕЗ @. Это публичная информация (не секрет).
@@ -400,6 +406,20 @@ class Settings:
     # --- Логирование ---
     log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
     log_to_file: bool = _env_bool("LOG_TO_FILE", True)
+
+    @property
+    def screen_url(self) -> str:
+        """Внешний адрес витрины или пустая строка, если домен не задан."""
+        base = self.web_public_url_raw.strip().rstrip("/")
+        if not base:
+            return ""
+        if not base.startswith(("http://", "https://")):
+            base = "https://" + base
+        # Домен можно указать и вместе с путём — лишний /screen в конце
+        # не повод отдавать человеку адрес /screen/screen.
+        if base.endswith("/screen"):
+            return base
+        return base + "/screen"
 
     @property
     def screen_link(self) -> str:

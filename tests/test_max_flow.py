@@ -72,6 +72,7 @@ class RecordingBot:
 
     def __init__(self) -> None:
         self.sent: list[dict] = []
+        self.edits: list[dict] = []
         self.answers: list[dict] = []
         self.members: list[dict] = []
 
@@ -85,11 +86,36 @@ class RecordingBot:
         })
         return {"message": {"body": {"mid": "mid.test"}}}
 
+    def edit_message(self, message_id, text="", buttons=None):
+        # Замена текста на месте — для человека это тот же ответ бота,
+        # поэтому она попадает в общую ленту self.sent. Отдельный
+        # список self.edits нужен, чтобы отличить замену от нового
+        # сообщения.
+        record = {
+            "chat_id": None, "user_id": None, "text": text,
+            "buttons": buttons or [], "image_path": None,
+            "video_path": None, "message_id": message_id,
+        }
+        self.sent.append(record)
+        self.edits.append(record)
+        return True
+
     def answer_callback(self, callback_id, *, notification=None,
                         text=None, buttons=None):
         self.answers.append({"callback_id": callback_id,
                              "notification": notification,
                              "text": text, "buttons": buttons})
+        # Ответ с текстом заменяет сообщение, в котором нажали кнопку.
+        # Для человека это тот же ответ бота, поэтому он попадает
+        # в общую ленту self.sent и в список замен self.edits.
+        if text is not None:
+            record = {
+                "chat_id": None, "user_id": None, "text": text,
+                "buttons": buttons or [], "image_path": None,
+                "video_path": None, "callback_id": callback_id,
+            }
+            self.sent.append(record)
+            self.edits.append(record)
         return True
 
     def get_chat_members(self, chat_id, limit: int = 100) -> list[dict]:
@@ -100,6 +126,7 @@ class RecordingBot:
 
     def clear(self) -> None:
         self.sent.clear()
+        self.edits.clear()
         self.answers.clear()
 
     # -- выборки ------------------------------------------------------------
@@ -206,10 +233,28 @@ def scenario_public() -> None:
     stats = db.count_audience(settings.db_path)
     check("пользователь учтён", stats["total"] >= 1)
 
+    check("/start прислал новое сообщение", not recorder.edits)
+
     press("m:ph")
     check("телефоны: есть 112", "112" in recorder.all_text)
     check("телефоны: есть телефон доверия", "222-74-47" in recorder.all_text)
     check_outgoing("телефоны")
+
+    # MAX не прокручивает переписку вниз сам: если ответ уходит новым
+    # сообщением, человек продолжает смотреть на прежний текст и
+    # решает, что кнопка не сработала. Поэтому раздел меню заменяет
+    # собой то сообщение, в котором нажали кнопку.
+    check("ответ на кнопку заменил сообщение", len(recorder.edits) == 1)
+    check("заменено по тому же нажатию",
+          bool(recorder.edits) and recorder.edits[0]["callback_id"] == "cb")
+    check("нового сообщения при этом нет", len(recorder.sent) == 1)
+    check("кнопки в заменённом сообщении остались",
+          "m:home" in recorder.payloads())
+    # На одно нажатие MAX принимает один ответ: если перед разделом
+    # отправить пустое подтверждение, замена текста уже не пройдёт.
+    check("на нажатие ответили ровно один раз", len(recorder.answers) == 1)
+    check("пустого подтверждения перед ответом нет",
+          bool(recorder.answers) and recorder.answers[0]["text"] is not None)
 
     press("m:sit")
     check("список ситуаций открылся", "Что делать" in recorder.all_text)
@@ -219,6 +264,35 @@ def scenario_public() -> None:
         press(f"s:{situation.key}")
         check(f"памятка: {situation.button}", situation.title in recorder.all_text)
         check_outgoing(f"памятка {situation.key}")
+
+    press("m:edu")
+    check("учёба: раздел открылся", "Поступление" in recorder.all_text)
+    check("учёба: есть выход на УрЮИ", "m:urui" in recorder.payloads())
+    check_outgoing("учёба в МВД России")
+
+    # Данные взяты с урюи.мвд.рф: предельный возраст, срок обращения,
+    # телефон приёмной комиссии и минимальные баллы ЕГЭ. Если раздел
+    # когда-нибудь перепишут, проверки покажут, что цифры пропали.
+    press("m:urui")
+    check("УрЮИ: предельный возраст", "25 лет" in recorder.all_text)
+    check("УрЮИ: срок обращения", "1 апреля" in recorder.all_text)
+    check("УрЮИ: телефон приёмной комиссии",
+          "8 (958) 224-66-21" in recorder.all_text)
+    check("УрЮИ: минимальные баллы ЕГЭ",
+          "36" in recorder.all_text and "42" in recorder.all_text)
+    check("УрЮИ: специальности", "40.05.01" in recorder.all_text)
+    links = [b.get("url", "") for m in recorder.sent
+             for row in m["buttons"] for b in row]
+    check("УрЮИ: ссылка сразу на вкладку «Поступление»",
+          any(url.endswith("/Postuplenie") for url in links), links)
+    check("УрЮИ: есть частые вопросы", "m:urui:faq" in recorder.payloads())
+    check_outgoing("поступление в УрЮИ")
+
+    press("m:urui:faq")
+    check("УрЮИ: про платное обучение", "платное" in recorder.all_text.lower())
+    check("УрЮИ: про колледж", "колледж" in recorder.all_text.lower())
+    check("УрЮИ: возврат к поступлению", "m:urui" in recorder.payloads())
+    check_outgoing("частые вопросы УрЮИ")
 
     press("m:res")
     check("справочник открылся", "Официальные источники" in recorder.all_text)
@@ -272,6 +346,74 @@ def scenario_assistant_offline() -> None:
         send_text(greeting)
         check(f"«{greeting}» не уходит модели",
               "Здравствуйте" in recorder.all_text or "Выберите раздел" in recorder.all_text)
+
+
+def scenario_word_commands() -> None:
+    """Названия разделов словами — для тех, кто не знает, что писать."""
+    print("\nКоманды обычными словами")
+
+    # Ищем признак раздела либо в тексте, либо среди кнопок — смотря
+    # что отличает раздел от соседних.
+    for word, expected in (
+        ("Меню", "m:sit"),
+        ("меню", "m:sit"),
+        ("  МЕНЮ!  ", "m:sit"),
+        ("телефоны", "112"),
+        ("Экстренные телефоны", "телефоны доверия"),
+        ("новости", "новост"),
+        ("поступление", "m:urui"),
+        ("урюи", "Уральский юридический институт"),
+        ("что делать", "Выберите ситуацию"),
+        ("о проекте", "О проекте"),
+    ):
+        send_text(word)
+        shown = recorder.all_text + " " + " ".join(recorder.payloads())
+        check(f"«{word}» открывает раздел", expected.lower() in shown.lower(),
+              shown[:70])
+        check_outgoing(f"слово «{word}»")
+
+    # Подпись любой кнопки главного меню обязана работать как слово:
+    # человек копирует её из переписки или набирает по памяти. Если
+    # кнопку переименуют, проверка напомнит добавить новое слово.
+    unknown = [b["text"] for row in max_bot.MENU_BUTTONS for b in row
+               if max_bot._alias_command(b["text"], staff=False) is None]
+    check("все подписи главного меню работают словами", not unknown, unknown)
+
+    # Значок перед подписью кнопки не мешает: люди копируют её целиком.
+    send_text("🆘 Что делать, если…")
+    check("подпись кнопки со значком тоже работает",
+          "s:" in " ".join(recorder.payloads()))
+
+    # Главное ограничение: вопрос помощнику не должен превращаться
+    # в команду только потому, что в нём есть слово «телефон».
+    send_text("У меня украли телефон, что делать?")
+    check("вопрос не подменяется разделом",
+          "112" not in recorder.all_text, recorder.all_text[:70])
+
+    send_text("как позвонить в полицию")
+    check("длинная фраза уходит помощнику, а не в раздел",
+          "Экстренные службы" not in recorder.all_text,
+          recorder.all_text[:70])
+
+    # Служебные слова обычному человеку не отвечают отказом: для него
+    # это просто слово, а не команда.
+    send_text("версия")
+    check("служебное слово не упирается в отказ",
+          "нет доступа" not in recorder.all_text.lower(),
+          recorder.all_text[:70])
+
+    # Передумал спрашивать — написал «меню» и вышел. Режим вопроса
+    # выставляем руками: без ключа AI помощник в него не входит.
+    max_bot._awaiting_question.add(USER_ID)
+    send_text("меню")
+    check("слово выводит из режима вопроса",
+          USER_ID not in max_bot._awaiting_question)
+    check("и открывает меню", "m:sit" in " ".join(recorder.payloads()))
+
+    # В группах правило молчания сильнее: там бот слушает только команды.
+    send_text("меню", chat_type="chat")
+    check("в группе слово разделом не считается", not recorder.sent,
+          recorder.all_text[:70])
 
 
 def scenario_access() -> None:
@@ -358,6 +500,40 @@ def scenario_staff() -> None:
         check(f"{command}", expected in recorder.all_text,
               recorder.all_text[:80])
         check_outgoing(command)
+
+    # /screen — путь страницы витрины, и его естественно набрать в чате.
+    # Раньше бот отвечал «Неизвестная команда»; теперь отдаёт адрес.
+    send_text("/screen")
+    check("/screen отвечает, а не ругается",
+          "Неизвестная команда" not in recorder.all_text)
+    check("/screen: показан интервал смены поста",
+          str(settings.screen_interval_seconds) in recorder.all_text)
+    check_outgoing("/screen")
+
+    saved_url = settings.web_public_url_raw
+    try:
+        settings.web_public_url_raw = "example.org/"
+        send_text("/screen")
+        urls = [b.get("url", "") for m in recorder.sent
+                for row in m["buttons"] for b in row]
+        check("/screen: кнопка ведёт на витрину",
+              "https://example.org/screen" in urls, urls)
+        # Домен можно задать и вместе с путём — второй /screen лишний.
+        settings.web_public_url_raw = "https://example.org/screen"
+        send_text("/screen")
+        urls = [b.get("url", "") for m in recorder.sent
+                for row in m["buttons"] for b in row]
+        check("/screen: путь в домене не удваивается",
+              "https://example.org/screen" in urls, urls)
+    finally:
+        settings.web_public_url_raw = saved_url
+
+    send_text("версия")
+    check("служебное слово работает у сотрудника",
+          "Версия кода" in recorder.all_text, recorder.all_text[:70])
+    send_text("витрина")
+    check("«витрина» открывает сведения об экране",
+          "Витрина" in recorder.all_text, recorder.all_text[:70])
 
     send_text("/add_moderator 777")
     check("модератор назначен",
@@ -765,6 +941,7 @@ def main() -> int:
     db.add_resources_bulk(settings.db_path, build_seed_resources())
 
     for scenario in (scenario_public, scenario_assistant_offline,
+                     scenario_word_commands,
                      scenario_access, scenario_group_silence, scenario_staff,
                      scenario_moderators, scenario_moderation,
                      scenario_polling,

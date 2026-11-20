@@ -27,6 +27,7 @@
 """
 from __future__ import annotations
 
+import contextvars
 import html
 import re
 import sys
@@ -40,6 +41,7 @@ from config import settings, validate_settings
 from content.help_content import (
     ABOUT_TEXT, DISCLAIMER, EDUCATION_INFO, EMERGENCY_PHONES,
     SITUATION_BY_KEY, SITUATIONS, TRUST_PHONES,
+    URUI_ADMISSION, URUI_ADMISSION_URL, URUI_FAQ,
 )
 from content.resources_seed import build_seed_resources, seed_counts
 from logging_setup import setup_logging
@@ -142,6 +144,19 @@ def seed_public_resources(update_existing: bool = False) -> int:
 # Отправка
 # ==========================================================================
 
+# Нажатие кнопки меню, на которое ещё не ответили. Ставится на время
+# разбора нажатия — см. show_section().
+#
+# Текст сообщения в MAX заменяется ответом на само нажатие
+# (POST /answers с полем message) — тем же способом, каким снимаются
+# кнопки с карточки на модерации. Правка через PUT /messages здесь не
+# срабатывала: бот честно пробовал переписать сообщение, получал отказ
+# и отправлял ответ новым сообщением.
+_pending_callback: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "pending_callback", default=None,
+)
+
+
 def reply(update: MaxUpdate, text: str, buttons=None, image_path=None,
           video_path=None) -> None:
     """
@@ -149,7 +164,26 @@ def reply(update: MaxUpdate, text: str, buttons=None, image_path=None,
 
     В личной переписке у события может не быть chat_id — тогда отвечаем
     по user_id, иначе сообщение просто некуда адресовать.
+
+    Ответ на кнопку меню заменяет собой то самое сообщение, в котором
+    кнопку нажали. MAX не прокручивает переписку вниз сам: новый ответ
+    уходил под видимую область, человек оставался смотреть на прежний
+    текст и решал, что кнопка не сработала.
     """
+    callback_id = _pending_callback.get()
+    if callback_id and image_path is None and video_path is None:
+        # Ответить на нажатие можно один раз: если обработчик отвечает
+        # повторно, второй ответ уйдёт обычным сообщением, иначе он
+        # стёр бы первый.
+        _pending_callback.set(None)
+        if bot.answer_callback(callback_id, text=text, buttons=buttons or []):
+            return
+        if update.message_id and bot.edit_message(
+                update.message_id, text, buttons or []):
+            return
+        # Заменить текст не вышло — отвечаем как раньше, обычным
+        # сообщением: лишняя строка лучше немого нажатия.
+
     if update.chat_id is not None:
         bot.send_message(chat_id=update.chat_id, text=text, buttons=buttons,
                          image_path=image_path, video_path=video_path)
@@ -309,9 +343,13 @@ PUBLIC_HELP = (
     "/resources — официальные источники МВД России\n"
     "/news — хорошие новости\n"
     "/education — учёба в МВД России\n"
+    "/urui — поступление в УрЮИ МВД России\n"
     "/region — выбрать свой регион\n"
     "/about — о проекте\n"
     "/whoami — ваш идентификатор и роль\n\n"
+    "Команды запоминать не нужно: напишите словом — <i>меню</i>, "
+    "<i>телефоны</i>, <i>новости</i>, <i>поступление</i> — и бот "
+    "откроет раздел.\n\n"
     "Можно просто написать вопрос обычными словами.\n\n"
     "🚨 Если случилось происшествие — звоните <b>102</b> или <b>112</b>."
 )
@@ -328,6 +366,7 @@ def staff_help(role: UserRole) -> str:
         "/schedule_status — статус автосбора",
         "/chatid — идентификатор текущего чата",
         "/version — версия кода (проверить, свежая ли сборка)",
+        "/screen — адрес витрины и её настройки",
     ]
     if role == UserRole.ADMIN:
         lines += [
@@ -546,6 +585,33 @@ def show_resource_region(update: MaxUpdate, key: str, index: int) -> None:
     rows.append([callback_button("⬅️ Назад", f"r:{key}:0")])
     reply(update,
           f"{_CATEGORY_LABELS[category]}\n📍 <b>{html.escape(region)}</b>", rows)
+
+
+# -- учёба в МВД России -----------------------------------------------------
+
+def show_education(update: MaxUpdate) -> None:
+    reply(update, EDUCATION_INFO, [
+        [callback_button("🏛 УрЮИ МВД России: поступление", "m:urui")],
+        [callback_button("🎓 Список вузов", "r:edu:0")],
+        BACK_TO_MENU,
+    ])
+
+
+def show_urui(update: MaxUpdate) -> None:
+    reply(update, URUI_ADMISSION, [
+        [link_button("🌐 Сайт УрЮИ: «Поступление»", URUI_ADMISSION_URL)],
+        [callback_button("❓ Частые вопросы", "m:urui:faq")],
+        [callback_button("🎓 Другие вузы МВД России", "r:edu:0")],
+        BACK_TO_MENU,
+    ])
+
+
+def show_urui_faq(update: MaxUpdate) -> None:
+    reply(update, URUI_FAQ, [
+        [link_button("🌐 Сайт УрЮИ: «Поступление»", URUI_ADMISSION_URL)],
+        [callback_button("⬅️ Поступление в УрЮИ", "m:urui")],
+        BACK_TO_MENU,
+    ])
 
 
 # -- новости ---------------------------------------------------------------
@@ -923,9 +989,9 @@ def handle_command(update: MaxUpdate, command: str, args: str) -> None:
     if command == "news":
         show_news(update); return
     if command == "education":
-        reply(update, EDUCATION_INFO,
-              [[callback_button("🎓 Список вузов", "r:edu:0")], BACK_TO_MENU])
-        return
+        show_education(update); return
+    if command == "urui":
+        show_urui(update); return
     if command == "region":
         show_region_picker(update); return
     if command == "about":
@@ -989,6 +1055,9 @@ def handle_command(update: MaxUpdate, command: str, args: str) -> None:
               + "\n\n<i>Если версия старее ожидаемой — хостинг собрал "
                 "не последний код, нужна пересборка.</i>")
         return
+
+    if command == "screen":
+        _cmd_screen(update); return
 
     if command == "sources":
         reply(update, "🔌 Проверяю источники, это займёт полминуты...")
@@ -1440,6 +1509,64 @@ def _do_broadcast(update: MaxUpdate, text: str) -> None:
 # Разбор событий
 # ==========================================================================
 
+def _cmd_screen(update: MaxUpdate) -> None:
+    """
+    Где открыть витрину и в каком она состоянии.
+
+    Команды с таким именем раньше не было: /screen — это путь страницы,
+    и в переписке бот отвечал «Неизвестная команда». Набрать её в чате
+    естественно, поэтому бот отдаёт готовый адрес и настройки экрана.
+    """
+    if not settings.web_enabled:
+        reply(update,
+              "🖥 <b>Витрина выключена</b>\n\n"
+              "Веб-часть не поднимается: <code>WEB_ENABLED=false</code>.",
+              [BACK_TO_MENU])
+        return
+    if not settings.screen_enabled:
+        reply(update,
+              "🖥 <b>Витрина отключена</b>\n\n"
+              "Страница закрыта настройкой "
+              "<code>SCREEN_ENABLED=false</code>.",
+              [BACK_TO_MENU])
+        return
+
+    lines = [
+        "🖥 <b>Витрина</b>\n",
+        f"Пост держится на экране: <b>{settings.screen_interval_seconds} с</b>",
+        f"В обороте последних постов: <b>{settings.screen_items}</b>",
+        f"Список обновляется каждые <b>{settings.screen_refresh_seconds} с</b>",
+    ]
+
+    buttons: list[list[dict]] = []
+    url = settings.screen_url
+    if url:
+        lines.append(f"\nАдрес: {html.escape(url)}")
+        buttons.append([link_button("🖥 Открыть витрину", url)])
+    else:
+        lines.append(
+            "\nАдрес складывается из домена сервера и пути "
+            f"<code>/screen</code> (порт {settings.web_port}). Чтобы бот "
+            "показывал его целиком и давал кнопку, задайте переменную "
+            "<code>WEB_PUBLIC_URL</code>."
+        )
+
+    lines.append(
+        "\n<b>Настройка отдельного экрана</b> — параметрами в адресе, "
+        "сервер трогать не нужно:\n"
+        "<code>/screen?region=Свердловская область</code>\n"
+        "<code>/screen?interval=120&amp;limit=10</code>"
+    )
+    lines.append(
+        "\n<b>На самом экране:</b> F — во весь экран, стрелки — "
+        "листать посты, пробел — пауза. Пульты телевизоров шлют те же "
+        "коды стрелок."
+    )
+
+    buttons.append(BACK_TO_MENU)
+    reply(update, "\n".join(lines), buttons)
+
+
 def _show_decision(update: MaxUpdate, item_id: str, result: str) -> None:
     """
     Показать модератору, что кнопка сработала.
@@ -1587,8 +1714,39 @@ def handle_callback(update: MaxUpdate) -> None:
             ack()
         return
 
-    ack()
+    # Здесь ack() не вызываем: на это нажатие ответит сам раздел,
+    # заменив текст сообщения. Второй ответ на тот же callback MAX уже
+    # не примет.
+    show_section(update, payload)
 
+
+def show_section(update: MaxUpdate, payload: str) -> None:
+    """
+    Открывает раздел меню прямо в том сообщении, где нажали кнопку.
+
+    Нажатие запоминаем на время разбора: его подхватит reply() и
+    ответит на него текстом раздела — MAX подставит этот текст вместо
+    прежнего. Так переписка с ботом остаётся одной карточкой, которая
+    меняется под пальцем, а не лентой, в которой нужно искать
+    последний ответ.
+    """
+    _pending_callback.set(update.callback_id)
+    try:
+        _open_section(update, payload)
+    finally:
+        unanswered = _pending_callback.get()
+        # Событие разобрано — дальше бот снова пишет обычными
+        # сообщениями: рассылка, карточки на модерацию, ответы
+        # помощника на вопрос, набранный руками.
+        _pending_callback.set(None)
+        if unanswered:
+            # Раздел ничего не ответил (кнопка-заглушка, неизвестный
+            # payload) — нажатие всё равно нужно закрыть, иначе в MAX
+            # у человека остаётся висеть ожидание.
+            bot.answer_callback(unanswered)
+
+
+def _open_section(update: MaxUpdate, payload: str) -> None:
     # --- публичное меню ---
     if payload == "m:home":
         _awaiting_question.discard(update.user_id or 0)
@@ -1604,8 +1762,11 @@ def handle_callback(update: MaxUpdate) -> None:
     elif payload == "m:news":
         show_news(update)
     elif payload == "m:edu":
-        reply(update, EDUCATION_INFO,
-              [[callback_button("🎓 Список вузов", "r:edu:0")], BACK_TO_MENU])
+        show_education(update)
+    elif payload == "m:urui":
+        show_urui(update)
+    elif payload == "m:urui:faq":
+        show_urui_faq(update)
     elif payload == "m:reg":
         show_region_picker(update)
     elif payload == "m:about":
@@ -1630,6 +1791,85 @@ def handle_callback(update: MaxUpdate) -> None:
         pass
     else:
         logger.debug("Неизвестный payload: %s", payload)
+
+
+# Названия разделов обычными словами.
+#
+# Команды на латинице помнить необязательно: человек пишет «меню» или
+# «телефоны» — бот открывает раздел. Текст сверяем целиком, а не по
+# вхождению: «что делать, если украли телефон» — это вопрос помощнику,
+# а не кнопка «Телефоны».
+#
+# Знаки и значки при сверке отбрасываются, поэтому подпись кнопки,
+# скопированная из переписки вместе со значком, тоже сработает.
+
+_ALIAS_CLEAN_RE = re.compile(r"[^0-9a-zа-я ]+")
+
+
+def _normalize_alias(text: str) -> str:
+    """Приводит фразу к виду, в котором её можно искать в словаре."""
+    text = text.lower().replace("ё", "е")
+    return " ".join(_ALIAS_CLEAN_RE.sub(" ", text).split())
+
+
+_PUBLIC_ALIASES_RAW: dict[str, tuple[str, ...]] = {
+    "menu": ("меню", "главное меню", "в меню", "назад", "начать", "старт",
+             "отмена", "menu", "start", "home", "cancel"),
+    "help": ("помощь", "справка", "что умеешь", "что ты умеешь",
+             "команды", "help"),
+    "situations": ("что делать", "что делать если", "памятки", "памятка",
+                   "ситуации", "инструкции", "все ситуации",
+                   "готовые памятки", "situations"),
+    "phones": ("телефоны", "телефон", "номера", "экстренные телефоны",
+               "телефоны доверия", "телефон доверия", "phones"),
+    "resources": ("источники", "официальные источники", "каналы",
+                  "официальные каналы", "ресурсы", "справочник",
+                  "источники мвд россии", "resources"),
+    "news": ("новости", "хорошие новости", "лента", "news"),
+    "education": ("учеба", "учеба в мвд", "учеба в мвд россии",
+                  "образование", "поступление", "вузы", "вузы мвд",
+                  "список вузов", "другие вузы мвд россии",
+                  "куда поступать", "education"),
+    "urui": ("урюи", "урюи мвд", "урюи мвд россии", "поступление в урюи",
+             "урюи мвд россии поступление",
+             "уральский юридический институт", "urui"),
+    "region": ("регион", "мой регион", "выбрать регион", "region"),
+    "about": ("о проекте", "про проект", "о боте", "про бота", "about"),
+    "ask": ("задать вопрос", "задать свой вопрос", "еще вопрос",
+            "вопрос", "спросить", "помощник", "ask"),
+    "whoami": ("кто я", "мой id", "мой ид", "мой айди", "whoami"),
+}
+
+# Служебные слова работают только у сотрудников: иначе случайное
+# «статистика» в переписке упиралось бы в «у вас нет доступа».
+_STAFF_ALIASES_RAW: dict[str, tuple[str, ...]] = {
+    "version": ("версия", "версия кода", "version"),
+    "screen": ("витрина", "экран", "screen"),
+    "pending": ("очередь", "очередь модерации", "pending"),
+    "diag": ("диагностика", "diag"),
+    "stats": ("статистика", "stats"),
+    "audience": ("аудитория", "audience"),
+    "chatid": ("id чата", "айди чата", "chatid"),
+}
+
+
+def _build_aliases(raw: dict[str, tuple[str, ...]]) -> dict[str, str]:
+    return {_normalize_alias(word): command
+            for command, words in raw.items() for word in words}
+
+
+_PUBLIC_ALIASES = _build_aliases(_PUBLIC_ALIASES_RAW)
+_STAFF_ALIASES = _build_aliases(_STAFF_ALIASES_RAW)
+
+
+def _alias_command(text: str, *, staff: bool) -> str | None:
+    """Команда, которую человек назвал словами, или None."""
+    key = _normalize_alias(text)
+    if not key or len(key) > 40:
+        return None
+    if staff and key in _STAFF_ALIASES:
+        return _STAFF_ALIASES[key]
+    return _PUBLIC_ALIASES.get(key)
 
 
 _SMALLTALK = {
@@ -1660,6 +1900,16 @@ def handle_message(update: MaxUpdate) -> None:
     # новостей. Обсуждение поста между кураторами — не вопрос к боту.
     # Нужен ответ помощника — пишите боту в личку или /ask <вопрос>.
     if not update.is_private:
+        return
+
+    # Название раздела словами равносильно команде. Проверяем это до
+    # режима вопроса: человек, передумавший спрашивать, пишет «меню» —
+    # и должен выйти в меню, а не отправить это слово помощнику.
+    named = _alias_command(text, staff=has_role(update.user_id,
+                                                UserRole.MODERATOR))
+    if named:
+        _awaiting_question.discard(update.user_id or 0)
+        handle_command(update, named, "")
         return
 
     if update.user_id in _awaiting_question:
@@ -1718,6 +1968,7 @@ def handle_update(update: MaxUpdate) -> None:
 #   resources - Официальные источники МВД
 #   news - Хорошие новости
 #   education - Учёба в МВД
+#   urui - Поступление в УрЮИ МВД России
 #   region - Выбрать свой регион
 #   about - О проекте
 #   help - Справка

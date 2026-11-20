@@ -361,9 +361,12 @@ __FONTS__
     inset: 0;
     display: grid;
     opacity: 0;
-    transition: opacity .7s ease;
+    /* Угасание прежнего кадра: .35 с. Длительность продублирована в
+       скрипте (FADE_OUT) — новый кадр ставится только после неё. */
+    transition: opacity .35s ease;
   }
-  .slide.visible { opacity: 1; }
+  /* Проявление нового кадра: .45 с, уже после угасания прежнего. */
+  .slide.visible { opacity: 1; transition: opacity .45s ease; }
 
   /* Горизонтальный экран (16:9): снимок слева, текст справа. */
   .slide { grid-template-columns: 58fr 42fr; grid-template-rows: 1fr; }
@@ -794,30 +797,53 @@ function preload(post) {
   }
 }
 
+// Кадры сменяются по очереди, а не внахлёст: сначала гаснет прежний
+// пост, и только потом проявляется следующий.
+//
+// Раньше оба кадра жили на экране одновременно и растворялись друг в
+// друге. Панель с текстом полупрозрачная, поэтому на каждой смене
+// сквозь новый текст почти секунду просвечивал предыдущий — читалось
+// как брак вёрстки, а на видеозаписи витрины попадало в каждый
+// переход. Пауза совпадает с длительностью угасания в стилях .slide.
+const FADE_OUT = 350;
+let swapToken = 0;
+
 function show(next) {
   if (posts.length === 0) return;
   index = (next + posts.length) % posts.length;
 
-  const slide = buildSlide(posts[index]);
-  stage.appendChild(slide);
-  // Кадр добавляем прозрачным и зажигаем на следующем кадре отрисовки,
-  // иначе переход не успевает начаться и картинка появляется рывком.
-  requestAnimationFrame(() => {
-    slide.classList.add('visible');
-    fitText(slide);
-  });
-
-  const previous = stage.querySelectorAll('.slide');
-  if (previous.length > 1) {
-    const old = previous[0];
-    old.classList.remove('visible');
-    setTimeout(() => old.remove(), 800);
-  }
-
-  counter.textContent = (index + 1) + ' / ' + posts.length;
+  // Отсчёт до следующего поста запускаем сразу, а не после угасания:
+  // иначе tick() успел бы ещё раз решить, что время вышло.
   slideStarted = Date.now();
   restartProgress();
-  preload(posts[(index + 1) % posts.length]);
+
+  const target = index;
+  const token = ++swapToken;
+  const outgoing = Array.from(stage.querySelectorAll('.slide'));
+  outgoing.forEach(node => node.classList.remove('visible'));
+
+  const appear = () => {
+    // За время угасания могли нажать «дальше» — тогда эту смену
+    // доводить до конца не нужно, её заменила более свежая.
+    if (token !== swapToken) return;
+    outgoing.forEach(node => node.remove());
+
+    const slide = buildSlide(posts[target]);
+    stage.appendChild(slide);
+    // Кегль подбираем, пока кадр ещё прозрачный: иначе видно, как
+    // текст скачет уже на экране. Заодно обмер заставляет браузер
+    // посчитать начальное состояние — без этого переход не начнётся
+    // и кадр появится рывком.
+    fitText(slide);
+    void slide.offsetWidth;
+    slide.classList.add('visible');
+
+    counter.textContent = (target + 1) + ' / ' + posts.length;
+    preload(posts[(target + 1) % posts.length]);
+  };
+
+  if (outgoing.length === 0 || REDUCED_MOTION) appear();
+  else setTimeout(appear, FADE_OUT);
 }
 
 // Система может просить не анимировать (настройка доступности, а на

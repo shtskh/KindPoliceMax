@@ -1224,6 +1224,14 @@ def test_screen() -> None:
         check("кегль подгоняется под длину текста",
               "function fitText" in page.text
               and "scrollHeight" in page.text)
+        # Посты сменяются по очереди: сначала гаснет прежний, потом
+        # появляется следующий. Перекрёстное растворение просвечивало
+        # прежний текст сквозь новый — на экране это выглядело как
+        # грязь на каждом посте.
+        check("кадры не накладываются друг на друга",
+              "const FADE_OUT" in page.text
+              and "swapToken" in page.text
+              and "requestAnimationFrame(() => {" not in page.text)
 
         # Монограмма в углу: по строке на слово названия, первая буква
         # золотая с обводкой. Строится из CHANNEL_TITLE, поэтому буквы
