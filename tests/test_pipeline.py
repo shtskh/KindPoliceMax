@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import pathlib
 import sys
 import re
 import shutil
@@ -1356,6 +1357,61 @@ def test_db_path() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_data_dir() -> None:
+    """
+    Хостинг пересобирает образ, и всё внутри контейнера начинается
+    заново: роли модераторов, очередь и картинки опубликованных постов
+    пропадали при каждом деплое. Переживает пересборку только отдельная
+    папка, путь к которой приходит в DATA_DIR.
+    """
+    import paths
+
+    section("Папка данных")
+
+    saved = paths.DATA_DIR
+    root = tempfile.mkdtemp()
+    try:
+        paths.DATA_DIR = pathlib.Path(root).resolve()
+        data_images = paths.DATA_DIR / "storage" / "images"
+        data_images.mkdir(parents=True, exist_ok=True)
+
+        fresh = data_images / "new.jpg"
+        fresh.write_bytes(b"x")
+        relative = paths.to_relative(fresh)
+        check("путь в базе остаётся коротким",
+              relative == "storage/images/new.jpg", relative)
+        check("и читается обратно из папки данных",
+              paths.resolve(relative) == fresh.resolve(), str(paths.resolve(relative)))
+
+        # Записи, сделанные до переезда: файл лежит ещё внутри проекта.
+        legacy_dir = paths.PROJECT_ROOT / "storage" / "images"
+        legacy_dir.mkdir(parents=True, exist_ok=True)
+        legacy = legacy_dir / "legacy_data_dir_test.jpg"
+        legacy.write_bytes(b"x")
+        try:
+            found = paths.resolve("storage/images/legacy_data_dir_test.jpg")
+            check("старые картинки не теряются", found == legacy.resolve(),
+                  str(found))
+        finally:
+            legacy.unlink(missing_ok=True)
+
+        # Пропавший файл ищем там, где теперь пишем, а не в образе.
+        missing = paths.resolve("storage/images/нет-такого.jpg")
+        check("пропавший файл ищется в папке данных",
+              str(missing).startswith(str(paths.DATA_DIR)), str(missing))
+    finally:
+        paths.DATA_DIR = saved
+        shutil.rmtree(root, ignore_errors=True)
+
+    # Без переменной поведение прежнее: на домашней машине отдельная
+    # папка данных только мешала бы.
+    check("без DATA_DIR всё лежит в проекте",
+          paths.DATA_DIR == paths.PROJECT_ROOT, str(paths.DATA_DIR))
+    check("база по умолчанию внутри папки данных",
+          paths.DEFAULT_DB_PATH.parent.parent == paths.DATA_DIR,
+          str(paths.DEFAULT_DB_PATH))
+
+
 # ==========================================================================
 # 18. Выдача новостей по ходу цикла
 # ==========================================================================
@@ -1711,7 +1767,7 @@ def main() -> int:
         test_assistant, test_audience_and_content, test_ranking,
         test_media, test_footer_title, test_image_generation,
         test_model_compatibility, test_screen, test_db_path,
-        test_live_delivery, test_graphic_filter,
+        test_data_dir, test_live_delivery, test_graphic_filter,
         test_donation_and_uniform, test_sources_and_panel,
         test_terminology,
     )

@@ -528,6 +528,13 @@ def scenario_staff() -> None:
     finally:
         settings.web_public_url_raw = saved_url
 
+    # После пересборки первым делом нужно знать, переживут ли её данные.
+    send_text("/diag")
+    check("/diag говорит, где лежат данные",
+          "Хранение" in recorder.all_text, recorder.all_text[:70])
+    check("/diag предупреждает о данных внутри проекта",
+          "DATA_DIR" in recorder.all_text, recorder.all_text[:70])
+
     send_text("версия")
     check("служебное слово работает у сотрудника",
           "Версия кода" in recorder.all_text, recorder.all_text[:70])

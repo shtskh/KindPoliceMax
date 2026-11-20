@@ -46,7 +46,7 @@ from content.help_content import (
 from content.resources_seed import build_seed_resources, seed_counts
 from logging_setup import setup_logging
 from maxapi import MaxBot, MaxUpdate, callback_button, link_button
-from paths import resolve
+from paths import DATA_DIR, PROJECT_ROOT, resolve
 from pipeline import assistant, image_pipeline
 from pipeline.orchestrator import regenerate_image, run_collection_cycle
 from pipeline.post_formatting import FOOTER_MARKER
@@ -1440,6 +1440,17 @@ def _cmd_diag(update: MaxUpdate) -> None:
         f"📡 Источников: RSS {len(settings.rss_sources)}, "
         f"Telegram-каналов {len(settings.telegram_channels)}",
     ]
+    # Где лежат данные — первое, что нужно знать после пересборки:
+    # база внутри образа каждый раз начинается с нуля, и роли, очередь
+    # и картинки опубликованных постов пропадают.
+    if DATA_DIR == PROJECT_ROOT:
+        storage_note = ("⚠️ Данные внутри проекта: пересборку образа "
+                        "не переживут. Задайте <code>DATA_DIR</code>.")
+    else:
+        storage_note = (f"✅ Папка данных: <code>{html.escape(str(DATA_DIR))}</code>")
+    lines += ["", "<b>Хранение</b>", storage_note,
+              f"🗄 База: <code>{html.escape(settings.db_path)}</code>"]
+
     lines += ["", "<b>Роли из переменных окружения</b>"]
     if settings.bot_admin_ids or settings.bot_moderator_ids:
         pairs = ([("👑", uid) for uid in settings.bot_admin_ids]
