@@ -79,6 +79,10 @@ class CollectionStats:
     mvd_collected: int = 0
     media_collected: int = 0
     telegram_collected: int = 0
+    # Сколько дала каждая федеральная лента ведомства по отдельности.
+    # Внутри графы «МВД России» теряются две тысячи записей из
+    # регионов, и понять, отвечает ли сам сайт мвд.рф, было нельзя.
+    federal_counts: dict[str, int] = field(default_factory=dict)
     llm_checks: int = 0
     reject_breakdown: dict[str, int] = field(default_factory=dict)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -92,6 +96,18 @@ class CollectionStats:
             f"📥 Собрано из источников: {self.raw_collected}",
             f"      МВД России: {self.mvd_collected} · "
             f"Telegram: {self.telegram_collected} · СМИ: {self.media_collected}",
+        ]
+        if self.federal_counts:
+            # Ноль здесь — не «новостей не было», а «лента не ответила»:
+            # сайт ведомства закрывается от неизвестных клиентов, и
+            # заметно это только по этой строке.
+            lines.append(
+                "      федеральные: " + " · ".join(
+                    f"{name.removeprefix('МВД России: ')} {count}"
+                    for name, count in self.federal_counts.items()
+                )
+            )
+        lines += [
             f"🔎 Проверено моделью: {self.llm_checks}",
             f"♻️ Пропущено как дубликаты: {self.duplicates}",
         ]
@@ -143,6 +159,7 @@ def collect_raw_news(stats: CollectionStats | None = None) -> list[RawNewsItem]:
     mvd_items: list[RawNewsItem] = []
     media_items: list[RawNewsItem] = []
     telegram_items: list[RawNewsItem] = []
+    federal_labels: set[str] = set()
 
     def fetch_rss(url: str, label: str) -> tuple[str, list[RawNewsItem]]:
         return label, RSSSource(url, source_name=label).fetch(
@@ -174,6 +191,14 @@ def collect_raw_news(stats: CollectionStats | None = None) -> list[RawNewsItem]:
                     pool.submit(fetch_rss, url, f"Вуз МВД России: {_edu_label(url)}"),
                     "mvd",
                 ))
+
+        # Сайт ведомства и МВД Медиа — первоисточники, а не СМИ:
+        # keyword-фильтр к ним не применяется, как и к лентам
+        # управлений, и в отчёте они идут отдельной строкой.
+        for url in settings.mvd_federal_feeds:
+            label = f"МВД России: {RSSSource(url).source_name}"
+            federal_labels.add(label)
+            jobs.append((pool.submit(fetch_rss, url, label), "mvd"))
 
         for url in settings.rss_sources:
             jobs.append((pool.submit(fetch_rss, url, RSSSource(url).source_name), "media"))
@@ -215,6 +240,10 @@ def collect_raw_news(stats: CollectionStats | None = None) -> list[RawNewsItem]:
     stats.mvd_collected = len(mvd_items)
     stats.media_collected = len(media_filtered)
     stats.telegram_collected = len(telegram_items)
+    stats.federal_counts = {
+        label: stats.source_counts.get(label, 0)
+        for label in sorted(federal_labels)
+    }
     return combined
 
 

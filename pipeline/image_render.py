@@ -236,6 +236,44 @@ def _wrap_text(text: str, font, max_width: int, draw) -> list[str]:
     return result
 
 
+def _truncate_to_width(text: str, font, max_width: int, draw) -> str:
+    """
+    Обрезает строку по реальной ширине, а не по числу символов.
+
+    Счёт по символам здесь не работал: «МВД России: Ханты-Мансийский
+    автономный округ — Югра» укладывается в сорок два знака и всё равно
+    занимает 781 пиксель из 904 доступных. Дата, нарисованная слева,
+    оказывалась прямо под названием источника, и подпись под новостью
+    превращалась в кашу из наложенных букв.
+    """
+    if max_width <= 0:
+        return ""
+    if draw.textlength(text, font=font) <= max_width:
+        return text
+
+    cut = len(text)
+    while cut > 0:
+        candidate = text[:cut].rstrip(" ·,—-") + "…"
+        if draw.textlength(candidate, font=font) <= max_width:
+            return candidate
+        cut -= 1
+    return ""
+
+
+def _compact_source(source_name: str) -> str:
+    """
+    «МВД России: Ханты-Мансийский автономный округ — Югра» →
+    «МВД России: Югра».
+
+    Короткие формы регионов уже собраны для плашки места. В подписи они
+    экономят место до того, как придётся резать строку многоточием.
+    """
+    head, separator, tail = source_name.partition(": ")
+    if not separator or not tail.strip():
+        return source_name.strip()
+    return f"{head}: {_shorten_region(tail)}"
+
+
 def _fit_text(
     text: str, draw, max_width: int, max_height: int,
     sizes: tuple[int, ...] = (66, 60, 54, 48, 44, 40, 36, 32),
@@ -499,18 +537,29 @@ def render_news_card(
 
         meta_font = _load_font(bold=False, size=30)
         date_label = _format_date(published_at)
+        date_width = (
+            draw.textlength(date_label, font=meta_font) if date_label else 0
+        )
         if date_label:
             draw.text((MARGIN, footer_y), date_label, font=meta_font, fill=COLOR_TEXT_MUTED)
 
         if source_name:
-            source_label = source_name
-            if len(source_label) > 42:
-                source_label = source_label[:41] + "…"
-            source_width = draw.textlength(source_label, font=meta_font)
-            draw.text(
-                (CARD_WIDTH - MARGIN - source_width, footer_y),
-                source_label, font=meta_font, fill=COLOR_TEXT_MUTED,
+            # Дата прижата влево, источник вправо. Сколько места
+            # осталось источнику — считаем заранее: без этого длинное
+            # название региона уезжало под дату.
+            gap = 40
+            room = int(
+                CARD_WIDTH - 2 * MARGIN - date_width - (gap if date_label else 0)
             )
+            source_label = _truncate_to_width(
+                _compact_source(source_name), meta_font, room, draw
+            )
+            if source_label:
+                source_width = draw.textlength(source_label, font=meta_font)
+                draw.text(
+                    (CARD_WIDTH - MARGIN - source_width, footer_y),
+                    source_label, font=meta_font, fill=COLOR_TEXT_MUTED,
+                )
 
         # --- Сохранение ---
         if output_path is None:

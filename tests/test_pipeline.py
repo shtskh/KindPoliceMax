@@ -182,6 +182,57 @@ def test_verify() -> None:
     )
     check("вакансия отклоняется", verify_news_item(vacancy).reject_code == "off_format")
 
+    # Чужие ведомства.
+    #
+    # Общие ленты СМИ отбираются по словам «полиц» и «мвд», и новость
+    # «Глава МВД Германии в шутку поблагодарил создателей GTA VI за
+    # спад протестной активности» прошла весь конвейер: слово «МВД» на
+    # месте, негативных маркеров нет, а модель сочла шутку министра
+    # тёплой историей и отправила её модератору.
+    from pipeline.verify import mentions_foreign_force
+
+    foreign = NewsItem(
+        id="4", source_name="Известия", source_url="https://iz.ru/1", title="",
+        raw_text="Глава МВД Германии Александер Добриндт в шутку "
+                 "поблагодарил создателей видеоигры GTA VI за спад "
+                 "протестной активности среди молодежи.",
+        published_at=datetime.now(timezone.utc),
+    )
+    result = verify_news_item(foreign)
+    check("новость о чужом ведомстве отклоняется", not result.passed)
+    check("код отказа foreign_force", result.reject_code == "foreign_force",
+          str(result.reject_code))
+
+    missed = [text for text in (
+        "Глава МВД Германии выступил с заявлением о протестах.",
+        "Полиция Франции задержала подозреваемого в краже.",
+        "Немецкая полиция сообщила о задержании группы.",
+        "Министерство внутренних дел Казахстана отчиталось за год.",
+        "Британская полиция начала расследование инцидента.",
+        "Министр внутренних дел Польши выступил в парламенте.",
+        "Сотрудники полиции Украины провели рейд по рынкам.",
+    ) if not mentions_foreign_force(text)]
+    check("обороты о зарубежных службах опознаются", not missed, str(missed))
+
+    # Ложные срабатывания дороже пропуска: каждое из них — потерянная
+    # настоящая новость, а их и так немного.
+    false_alarms = [text for text in (
+        "В дежурную часть ОМВД России по Советскому району обратился "
+        "23-летний местный житель с заявлением о мошенничестве.",
+        "Полицейские вернули туристу из Германии потерянный кошелёк.",
+        "Сотрудники МВД России по Республике Татарстан спасли ребёнка.",
+        "Инспекторы ДПС помогли водителю, гражданину Казахстана, "
+        "завести машину в мороз.",
+        "Полиция Москвы разыскала пропавшего подростка за сутки.",
+        "Участковый нашёл пожилого жителя Красноярского края в лесу.",
+        "Российские полицейские помогли гражданину Белоруссии "
+        "добраться до дома.",
+        "Полицейские задержали гражданина Германии за нарушение "
+        "режима пребывания.",
+    ) if mentions_foreign_force(text)]
+    check("российские новости фильтр не трогает", not false_alarms,
+          str(false_alarms))
+
 
 # ==========================================================================
 # 3. Подпись поста
@@ -351,6 +402,52 @@ def test_images() -> None:
           _format_place("Москва", "Москва") == "Москва",
           _format_place("Москва", "Москва"))
 
+    # Подпись под новостью: дата слева, источник справа. Источник
+    # обрезался по числу символов, а не по ширине, и «МВД России:
+    # Ханты-Мансийский автономный округ — Югра» (42 знака, 781 пиксель
+    # из 904) ложился прямо поверх даты — на витрине читалось как две
+    # наложенные строки.
+    if CARD_RENDER_AVAILABLE:
+        from PIL import Image, ImageDraw
+        from pipeline.image_render import (
+            CARD_WIDTH, MARGIN, _compact_source, _truncate_to_width,
+        )
+
+        meta_font = _load_font(bold=False, size=30)
+        probe = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+        room = int(
+            CARD_WIDTH - 2 * MARGIN
+            - probe.textlength("20 ноября 2026", font=meta_font) - 40
+        )
+
+        check("длинный источник сокращается через регион",
+              _compact_source(
+                  "МВД России: Ханты-Мансийский автономный округ — Югра"
+              ) == "МВД России: Югра")
+        check("источник без региона не трогаем",
+              _compact_source("Telegram: @mediamvd") == "Telegram: @mediamvd")
+
+        too_wide = []
+        for name in (
+            "МВД России: Ханты-Мансийский автономный округ — Югра",
+            "МВД России: Карачаево-Черкесская Республика",
+            "МВД России: Кемеровская область — Кузбасс",
+            "Известия — новости политики, экономики, спорта, культуры",
+            "Telegram: @mediamvd",
+            "А" * 120,
+        ):
+            label = _truncate_to_width(
+                _compact_source(name), meta_font, room, probe)
+            if probe.textlength(label, font=meta_font) > room:
+                too_wide.append(name)
+        check("источник не наезжает на дату", not too_wide, too_wide)
+
+        check("короткий источник остаётся целым",
+              _truncate_to_width("Telegram: @mediamvd", meta_font, room, probe)
+              == "Telegram: @mediamvd")
+        check("обрезанный источник заканчивается многоточием",
+              _truncate_to_width("А" * 120, meta_font, 200, probe).endswith("…"))
+
     if CARD_RENDER_AVAILABLE:
         with tempfile.TemporaryDirectory() as tmp:
             out = os.path.join(tmp, "card.jpg")
@@ -463,6 +560,36 @@ def test_sources() -> None:
     check("HTML из RSS вычищается",
           RSSSource._clean("<p>Текст&nbsp;новости</p>") == "Текст новости",
           RSSSource._clean("<p>Текст&nbsp;новости</p>"))
+
+    # Сайт ведомства и МВД Медиа лежали в общем списке СМИ: в отчёте о
+    # сборе они считались за «СМИ» наравне с РИА и Известиями, и к ним
+    # применялся keyword-фильтр, придуманный для шумных лент.
+    from config import settings as app_settings
+    from pipeline.orchestrator import CollectionStats
+
+    check("федеральные ленты ведомства вынесены отдельно",
+          any("мвд.рф" in url for url in app_settings.mvd_federal_feeds)
+          and any("mvdmedia" in url for url in app_settings.mvd_federal_feeds),
+          str(app_settings.mvd_federal_feeds))
+    check("в списке СМИ ведомственных лент не осталось",
+          not [u for u in app_settings.rss_sources
+               if "мвд" in u or "mvdmedia" in u],
+          str(app_settings.rss_sources))
+
+    # Внутри графы «МВД России» две тысячи записей из регионов, и
+    # молчание самого мвд.рф в ней незаметно. Отдельная строка отвечает
+    # на вопрос «отвечает ли сайт ведомства» каждым сбором.
+    stats = CollectionStats(raw_collected=100, mvd_collected=90)
+    stats.federal_counts = {"МВД России: мвд.рф": 0,
+                            "МВД России: mvdmedia.ru": 20}
+    federal_line = next(
+        (line for line in stats.summary_lines() if "федеральные" in line), "")
+    check("отчёт показывает каждую федеральную ленту",
+          "мвд.рф 0" in federal_line and "mvdmedia.ru 20" in federal_line,
+          federal_line)
+    check("без федеральных лент строки нет",
+          not [line for line in CollectionStats().summary_lines()
+               if "федеральные" in line])
 
     # Разбор HTML Telegram — без обращения к сети.
     from bs4 import BeautifulSoup
@@ -1157,6 +1284,23 @@ def test_screen() -> None:
         check("пометка об ИИ передана",
               data["posts"][-1]["generated"] is True)
 
+        # Фирменная карточка — не снимок, а тот же текст новости,
+        # впечатанный в картинку вместе с датой и источником. Рядом с
+        # панелью витрины новость читалась дважды, разным кеглем.
+        db.set_image(db_path, "pub-1", "storage/images/нет-такого.jpg", "card")
+        carded = next(p for p in client.get("/screen/data").json()["posts"]
+                      if p["id"] == "pub-1")
+        check("карточка помечена отдельным признаком",
+              carded["card"] is True, str(carded))
+        check("карточка не выдаётся за иллюстрацию ИИ",
+              carded["generated"] is False, str(carded))
+        db.set_image(db_path, "pub-1",
+                     "storage/images/нет-такого.jpg", "generated")
+        restored = next(p for p in client.get("/screen/data").json()["posts"]
+                        if p["id"] == "pub-1")
+        check("обычная иллюстрация признак не получает",
+              restored["card"] is False, str(restored))
+
         # Медиа: только у опубликованных и только существующие файлы.
         check("нет файла — 404, а не пустая картинка",
               client.get("/screen/media/pub-1").status_code == 404)
@@ -1233,6 +1377,14 @@ def test_screen() -> None:
               "const FADE_OUT" in page.text
               and "swapToken" in page.text
               and "requestAnimationFrame(() => {" not in page.text)
+
+        # Пост с фирменной карточкой и пост вообще без картинки
+        # занимают кадр целиком: делить его не с чем, а пустая тёмная
+        # половина читалась как сбой загрузки.
+        check("карточка не дублирует панель витрины",
+              "const textOnly = post.card || !post.media_url;" in page.text
+              and ".slide.text-only {" in page.text
+              and ".slide.text-only .text {" in page.text)
 
         # Монограмма в углу: по строке на слово названия, первая буква
         # золотая с обводкой. Строится из CHANNEL_TITLE, поэтому буквы
@@ -1656,8 +1808,12 @@ def test_sources_and_panel() -> None:
           len(set(settings.mvd_edu_feeds)) == len(settings.mvd_edu_feeds))
     check("регионов стало 82", len(settings.mvd_rss_regions) == 82,
           str(len(settings.mvd_rss_regions)))
+    # МВД Медиа и сайт ведомства раньше лежали в общем списке СМИ.
+    # Собираются они по-прежнему, но уже как первоисточники — без
+    # keyword-фильтра и отдельной строкой в отчёте.
     check("МВД Медиа в списке лент",
-          any("mvdmedia" in url for url in settings.rss_sources))
+          any("mvdmedia" in url for url in settings.mvd_federal_feeds),
+          str(settings.mvd_federal_feeds))
 
     # --- защита панели модерации ---
     try:

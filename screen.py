@@ -241,6 +241,11 @@ def screen_data(
             # пропорциям (object-fit: cover), и впечатанная надпись
             # из правого нижнего угла может уехать за край.
             "generated": item.image_source == "generated",
+            # Фирменная карточка — не снимок, а тот же текст новости,
+            # впечатанный в картинку. Рядом с панелью витрины новость
+            # читалась дважды, разным кеглем, и дата показывалась два
+            # раза. Страница по этому признаку показывает только панель.
+            "card": item.image_source == "card",
             "media_url": f"/screen/media/{item.id}" if _media_kind(item) else None,
         })
 
@@ -375,6 +380,27 @@ __FONTS__
   @media (orientation: portrait) {
     .slide { grid-template-columns: 1fr; grid-template-rows: 54fr 46fr; }
   }
+
+  /* Пост без снимка: иллюстрацией была фирменная карточка с тем же
+     текстом. Делить кадр не с чем — панель занимает его целиком.
+     Два класса в селекторе весомее правила для портрета, поэтому
+     работает в обеих ориентациях. */
+  .slide.text-only { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+  /* На всю ширину экрана узкая колонка не годится: кегль панели
+     рассчитан на 42% кадра, и короткая новость терялась посреди
+     тёмного поля. Текст укрупняем, а строку держим в пределах
+     читаемой длины и ставим колонку по центру — заодно она не
+     заезжает под монограмму в левом верхнем углу. */
+  .slide.text-only .body {
+    justify-content: center;
+    align-items: center;
+    padding: 16vmin 10vmin 8vmin;
+  }
+  .slide.text-only .body > * { width: min(100%, 118vmin); }
+  .slide.text-only .text { font-size: 5.4vmin; }
+  /* Подпись возвращаем под текст: прижимать её к низу имеет смысл,
+     пока панель узкая и высокая. */
+  .slide.text-only .meta { margin-top: 3vmin; padding-right: 0; }
 
   .media { position: relative; overflow: hidden; background: #060912; }
   /* Снимок показываем целиком (contain): пропорции фотографий с мест
@@ -760,8 +786,21 @@ function buildSlide(post) {
   const slide = document.createElement('div');
   slide.className = 'slide';
 
-  let media = '<div class="media"></div>';
-  if (post.media_url) {
+  // Фирменная карточка несёт тот же текст, ту же дату и тот же
+  // источник, что и панель рядом: новость читалась на экране дважды,
+  // разным кеглем, и дата показывалась два раза. Панель рисуется
+  // шрифтом экрана, подбирает размер под место и выглядит резче —
+  // её и оставляем, на весь кадр.
+  //
+  // Пост вообще без изображения попадает сюда же: делить кадр не с
+  // чем, а пустая тёмная половина читалась как сбой загрузки.
+  const textOnly = post.card || !post.media_url;
+  if (textOnly) {
+    slide.classList.add('text-only');
+  }
+
+  let media = '';
+  if (!textOnly) {
     // Размытая подложка — тот же файл: лишней загрузки нет, браузер
     // берёт его из кеша.
     const backdrop = '<div class="media-blur" style="background-image:url(' +

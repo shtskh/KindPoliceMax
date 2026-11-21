@@ -712,7 +712,12 @@ def moderation_buttons(item_id: str) -> list[list[dict]]:
     return [
         [callback_button("✅ Опубликовать", f"a:{item_id}"),
          callback_button("❌ Отклонить", f"x:{item_id}")],
-        [callback_button("🖼 Другая картинка", f"i:{item_id}")],
+        # Две разные замены изображения. Прежде кнопка была одна и
+        # называлась «Другая картинка», а на деле всегда собирала
+        # фирменную карточку — попросить генератор нарисовать новый
+        # кадр из чата было нельзя.
+        [callback_button("🎨 Другая иллюстрация", f"ig:{item_id}"),
+         callback_button("🔷 Фирменная карточка", f"ic:{item_id}")],
     ]
 
 
@@ -1375,6 +1380,8 @@ def _cmd_stats(update: MaxUpdate) -> None:
         "negative_marker": "негатив о сотруднике",
         "off_format": "не тот формат", "too_short": "короткий текст",
         "blood_drive": "донорская акция",
+        "foreign_force": "чужое ведомство",
+        "not_our_subject": "не про полицию России",
         "routine": "служебная рутина", "not_positive": "не позитивная",
         "not_authentic": "сомнительная достоверность",
         "archived": "архивировано вручную", "llm_or_legacy": "решение ИИ",
@@ -1679,13 +1686,13 @@ def handle_callback(update: MaxUpdate) -> None:
             bot.answer_callback(update.callback_id, notification=notification)
 
     # --- модерация (только для модераторов) ---
-    if payload[:2] in ("a:", "x:", "i:"):
+    if payload[:2] in ("a:", "x:", "i:") or payload[:3] in ("ig:", "ic:"):
         if not has_role(update.user_id, UserRole.MODERATOR):
             ack("Нет доступа")
             _report_no_access(update)
             return
 
-        action, item_id = payload[0], payload[2:]
+        action, _, item_id = payload.partition(":")
         if action == "a":
             result = approve_item(update, item_id)
             ack(result)
@@ -1697,10 +1704,13 @@ def handle_callback(update: MaxUpdate) -> None:
             ack(result)
             _show_decision(update, item_id, result)
         else:
-            ack("Рисую новую картинку…")
+            # «i:» — прежняя единственная кнопка. В чате ещё висят
+            # карточки с ней, и нажатие должно работать по-старому.
+            as_card = action in ("i", "ic")
+            ack("Собираю карточку…" if as_card else "Рисую иллюстрацию…")
             item = db.get_by_id(settings.db_path, item_id)
             if item and item.status == NewsStatus.PENDING_MODERATION:
-                updated = regenerate_image(item_id, True)
+                updated = regenerate_image(item_id, force_card=as_card)
                 if updated:
                     send_to_moderators(updated, chat_id=update.chat_id)
         return

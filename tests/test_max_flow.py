@@ -670,8 +670,36 @@ def scenario_moderation() -> None:
     check("карточка ушла в чат модераторов",
           recorder.sent and recorder.sent[0]["chat_id"] == 999,
           str(recorder.sent[:1])[:120])
-    check("на карточке три кнопки", len(recorder.payloads()) == 3)
+    check("на карточке четыре кнопки", len(recorder.payloads()) == 4,
+          str(recorder.payloads()))
     check_outgoing("карточка модерации")
+
+    # Замена изображения: две разные кнопки. Раньше была одна, с
+    # подписью «Другая картинка», и она всегда собирала фирменную
+    # карточку — попросить генератор нарисовать новый кадр прямо из
+    # чата модерации было нельзя.
+    payloads = recorder.payloads()
+    check("кнопка иллюстрации отдельная", f"ig:{item.id}" in payloads, str(payloads))
+    check("кнопка карточки отдельная", f"ic:{item.id}" in payloads, str(payloads))
+
+    asked: list[tuple[str, bool]] = []
+    original_regen = max_bot.regenerate_image
+    max_bot.regenerate_image = (
+        lambda item_id, force_card=True: asked.append((item_id, force_card)) and None
+    )
+    try:
+        press(f"ig:{item.id}")
+        press(f"ic:{item.id}")
+        press(f"i:{item.id}")
+    finally:
+        max_bot.regenerate_image = original_regen
+
+    check("«другая иллюстрация» просит генерацию",
+          asked[:1] == [(item.id, False)], str(asked))
+    check("«фирменная карточка» просит карточку",
+          asked[1:2] == [(item.id, True)], str(asked))
+    check("прежняя кнопка «i:» по-прежнему даёт карточку",
+          asked[2:3] == [(item.id, True)], str(asked))
 
     press(f"a:{item.id}")
     published = [m for m in recorder.sent if m["chat_id"] == 888]
