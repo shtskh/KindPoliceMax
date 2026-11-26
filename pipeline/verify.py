@@ -8,7 +8,8 @@ LLM там, где хватает локальной эвристики:
   2. Негативные маркеры (новость ПРО проступок сотрудника) — сразу отказ.
   3. Явная реклама/вакансии/розыск — сразу отказ.
   4. Доверенность источника — влияет только на пометку для модератора.
-  5. LLM: достоверность, позитивность, «подвиг или рутина», регион/город.
+  5. LLM: достоверность, позитивность, «подвиг или рутина»,
+     «предупреждение о способе обмана», регион/город.
 
 БЕЗОПАСНОСТЬ ПРОМПТА
 --------------------
@@ -219,6 +220,11 @@ class VerificationResult:
     # Причина отказа в машиночитаемом виде — удобно для статистики /stats.
     reject_code: str | None = None
     tags: list[str] = field(default_factory=list)
+    # Почему новость прошла: "поступок" или "предупреждение".
+    # Модератор видит это в карточке, а pipeline/image_prompt.py по
+    # этому полю выбирает, что рисовать: сцену с сотрудниками или
+    # предметный кадр без людей.
+    category: str | None = None
 
 
 def domain_is_trusted(source_url: str) -> bool:
@@ -350,12 +356,23 @@ def verify_news_item(item: NewsItem) -> VerificationResult:
 
     llm_result = _llm_authenticity_check(item.raw_text or item.title or "")
 
-    passed = (
+    base_ok = (
         llm_result["looks_authentic"]
         and llm_result["about_russian_police"]
-        and llm_result["is_positive"]
-        and llm_result["is_heroic_or_warm"]
     )
+    # Первый путь — добрый поступок, ради которого канал и создавался.
+    as_deed = base_ok and llm_result["is_positive"] and llm_result["is_heroic_or_warm"]
+    # Второй путь — предупреждение о способе обмана. Требование
+    # is_positive к нему не применяется: новость о новой схеме
+    # мошенничества по сути своей о преступлении, а позитивна в ней
+    # роль полиции, которая предостерегает.
+    as_warning = (
+        base_ok
+        and settings.publish_prevention
+        and llm_result["is_crime_warning"]
+    )
+    passed = as_deed or as_warning
+    category = "поступок" if as_deed else ("предупреждение" if as_warning else None)
 
     reject_code = None
     if not passed:
@@ -363,19 +380,23 @@ def verify_news_item(item: NewsItem) -> VerificationResult:
             reject_code = "not_authentic"
         elif not llm_result["about_russian_police"]:
             reject_code = "not_our_subject"
+        elif llm_result["is_crime_warning"] and not settings.publish_prevention:
+            reject_code = "prevention_off"
         elif not llm_result["is_positive"]:
             reject_code = "not_positive"
         else:
             reject_code = "routine"
 
+    category_note = f"Категория: {category}. " if category else ""
     return VerificationResult(
         passed=passed,
-        notes=f"{source_notes} | {llm_result['reasoning']}",
+        notes=f"{source_notes} | {category_note}{llm_result['reasoning']}",
         region_hint=llm_result.get("region"),
         city_hint=llm_result.get("city"),
         trusted_source=trusted,
         reject_code=reject_code,
         tags=llm_result.get("tags") or [],
+        category=category,
     )
 
 
@@ -402,6 +423,7 @@ VERIFY_USER_TEMPLATE = """
   "about_russian_police": true,
   "is_positive": true,
   "is_heroic_or_warm": true,
+  "is_crime_warning": false,
   "region": "название региона или null",
   "city": "название города или null",
   "tags": ["спасение"],
@@ -450,12 +472,36 @@ is_heroic_or_warm:
   Рутина НЕ должна проходить, даже если полиция формально хорошо
   выполнила работу.
 
+is_crime_warning:
+  Вторая тема канала — предупреждения о преступлениях. Это ОТДЕЛЬНОЕ
+  поле: оно не зависит от is_heroic_or_warm и от is_positive.
+
+  true — новость ПРЕДОСТЕРЕГАЕТ читателя: разбирает способ обмана,
+  рассказывает о новой схеме мошенничества, объясняет, как злоумышленники
+  действуют и что делать, чтобы не попасться. Признаки: описан сам приём
+  («звонят от имени соцзащиты», «просят назвать код из СМС», «предлагают
+  перевести деньги на безопасный счёт»), есть обращение к читателю или
+  понятный вывод, как себя вести.
+
+  Разбор реального случая тоже true, если из него ясно видна схема и
+  читатель может узнать в ней себя.
+
+  false — обычная сводка о раскрытом деле: кого-то задержали, возбуждено
+  уголовное дело, изъято имущество, вынесен приговор. Такая новость
+  сообщает о результате работы, но ничему не учит. Также false —
+  статистика по мошенничествам, отчёты и анонсы профилактических
+  мероприятий без разбора самой схемы.
+
+  Проверь себя вопросом: узнает ли читатель из этого текста что-то
+  конкретное, что поможет ему не отдать деньги? Если нет — false.
+
 region и city: ТОЛЬКО название места («Татарстан», «Казань»). Если места
 в тексте нет — верни null, не выдумывай и не пиши «не указан».
 Не указывай «Россия» в качестве региона.
 
 tags: 1-3 коротких ярлыка из списка: спасение, дети, пожар, медицина,
-поиск, ДТП, животные, помощь, вода, лёд, пожилые, возвращение.
+поиск, ДТП, животные, помощь, вода, лёд, пожилые, возвращение,
+мошенничество, кибербезопасность, профилактика.
 
 {text_start}
 {news_text}
@@ -478,6 +524,10 @@ def _llm_authenticity_check(text: str) -> dict:
         "about_russian_police": True,
         "is_positive": True,
         "is_heroic_or_warm": True,
+        # Предупреждение без модели не распознать: при недоступном
+        # API новость и так уходит на ручную модерацию по пути
+        # «поступка», а ложное true здесь только запутало бы отчёт.
+        "is_crime_warning": False,
         "reasoning": "AI-проверка недоступна — требуется ручная модерация",
         "region": None,
         "city": None,
@@ -528,6 +578,7 @@ def _llm_authenticity_check(text: str) -> dict:
         "about_russian_police": bool(parsed.get("about_russian_police", True)),
         "is_positive": bool(parsed.get("is_positive", False)),
         "is_heroic_or_warm": bool(parsed.get("is_heroic_or_warm", False)),
+        "is_crime_warning": bool(parsed.get("is_crime_warning", False)),
         "reasoning": _clean_reasoning(parsed.get("reasoning")),
         "region": _clean_place_field(parsed.get("region")),
         "city": _clean_place_field(parsed.get("city")),

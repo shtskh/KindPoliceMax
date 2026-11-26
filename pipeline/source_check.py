@@ -101,7 +101,8 @@ def check_sources() -> list[SourceStatus]:
             for code in settings.mvd_rss_regions[:REGION_SAMPLE]:
                 region = region_for_code(code) or code
                 jobs.append(pool.submit(
-                    _check_rss, f"МВД России: {region}", f"https://{code}.мвд.рф/news/rss"
+                    _check_rss, f"МВД России: {region}",
+                    settings.mvd_region_feed(code),
                 ))
 
         for url in settings.rss_sources[:6]:

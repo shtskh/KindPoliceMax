@@ -177,7 +177,7 @@ def collect_raw_news(stats: CollectionStats | None = None) -> list[RawNewsItem]:
             for code in settings.mvd_rss_regions:
                 region = region_for_code(code) or f"регион {code}"
                 jobs.append((
-                    pool.submit(fetch_rss, f"https://{code}.мвд.рф/news/rss",
+                    pool.submit(fetch_rss, settings.mvd_region_feed(code),
                                 f"МВД России: {region}"),
                     "mvd",
                 ))

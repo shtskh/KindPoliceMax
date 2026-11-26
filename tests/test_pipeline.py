@@ -991,11 +991,23 @@ def test_image_generation() -> None:
     check("форма описана как российская полицейская",
           "Russian police uniform" in default_suffix)
     check("символика по умолчанию нечитаема",
-          "not legible" in default_suffix and "No text" in default_suffix)
+          "not legible" in default_suffix
+          and "No readable text" in default_suffix)
+    # Нечитаемая — не значит отсутствующая: на форменной куртке нашивка
+    # через всю спину есть всегда, и пустая спина — брак.
+    check("нашивка на спине упомянута даже в режиме «не читать»",
+          "upper back" in default_suffix)
+    check("пустая спина запрещена", "never blank" in default_suffix)
 
     settings.ai_image_show_insignia = True
+    on_suffix = prompt_suffix()
     check("переключатель включает шеврон и кокарду",
-          "sleeve patch" in prompt_suffix() and "cockade" in prompt_suffix())
+          "left sleeve" in on_suffix and "cockade" in on_suffix)
+    # Генераторы обучены на старом образце формы, поэтому действующую
+    # надпись приходится называть прямо, а старую — запрещать.
+    check("на спине действующий образец", "МВД РОССИИ" in on_suffix)
+    check("старый образец запрещён",
+          "never the older" in on_suffix and "ПОЛИЦИЯ" in on_suffix)
     settings.ai_image_show_insignia = saved_insignia
 
     # Пустая новость иллюстрироваться не может.
@@ -1761,23 +1773,40 @@ def test_donation_and_uniform() -> None:
     check("у ДПС есть светоотражающий жилет",
           "lime-yellow" in look and "reflective" in look, look[:80])
     check("у ДПС есть патрульная машина", "patrol car" in look, look[:80])
+    check("у жилета ДПС размечена спина", "across the back" in look, look[:80])
 
     unit, look = look_for("Участковый уполномоченный нашёл подростка")
     check("участковый распознаётся", unit == "участковый", str(unit))
     check("участковый без тактической экипировки",
           "no tactical gear" in look, look[:80])
+    # Нашивка на спине предусмотрена курткой, а не кителем: требовать её
+    # от повседневной формы — такая же ошибка, как забыть на куртке.
+    check("у повседневной формы нет нашивки на спине",
+          "no back patch" in look, look[:80])
 
     unit, look = look_for("Кинолог со служебной собакой отыскал грибника")
     check("кинолог распознаётся", unit == "кинолог", str(unit))
     check("у кинолога есть собака", "shepherd" in look, look[:80])
+    check("у полевой формы нашивка на спине есть",
+          "across the upper back" in look, look[:80])
 
     unit, look = look_for("Патрульный наряд полиции спас женщину из огня")
     check("ППС распознаётся", unit == "ППС", str(unit))
     check("у ППС бронежилет и рация",
           "protective vests" in look and "radio" in look, look[:80])
+    check("у ППС нашивка на спине и шеврон на рукаве",
+          "across the upper back" in look and "left sleeve" in look,
+          look[:80])
+
+    unit, look = look_for("Курсанты института МВД России помогли ветерану")
+    check("курсанты распознаются", unit == "курсанты", str(unit))
+    check("у парадной формы нет нашивки на спине",
+          "no back patch" in look, look[:80])
 
     unit, look = look_for("Полицейские вынесли женщину из горящего дома")
     check("без признаков службы — общее описание", unit is None, str(unit))
+    check("в общем описании есть и шеврон, и нашивка на спине",
+          "left sleeve" in look and "upper back" in look, look[:80])
 
     # Экипировка должна попадать в итоговый промпт.
     _, dps_look = look_for("Инспекторы ДПС перекрыли движение")
@@ -1806,8 +1835,39 @@ def test_sources_and_panel() -> None:
           all(".мвд.рф/" in url for url in settings.mvd_edu_feeds))
     check("дубликатов среди лент вузов нет",
           len(set(settings.mvd_edu_feeds)) == len(settings.mvd_edu_feeds))
-    check("регионов стало 82", len(settings.mvd_rss_regions) == 82,
+    check("регионов стало 88", len(settings.mvd_rss_regions) == 88,
           str(len(settings.mvd_rss_regions)))
+    # В России 89 субъектов. Не хватает только Ленинградской области:
+    # у 47.мвд.рф просрочен TLS-сертификат (см. комментарий в config).
+    _codes = set(settings.mvd_rss_regions)
+    check("новые регионы подключены", {"80", "81", "84", "85"} <= _codes,
+          str(sorted({"80", "81", "84", "85"} - _codes)))
+    check("Волгоградская и Вологодская подключены",
+          {"34", "35"} <= _codes, str(sorted({"34", "35"} - _codes)))
+    check("Ленинградской пока нет — просрочен сертификат",
+          "47" not in _codes)
+    check("дубликатов среди кодов нет",
+          len(_codes) == len(settings.mvd_rss_regions))
+    from content.regions import region_for_code as _rfc
+    check("у каждого кода есть название субъекта",
+          all(_rfc(c) for c in settings.mvd_rss_regions),
+          str([c for c in settings.mvd_rss_regions if not _rfc(c)]))
+    check("Чечня подписана, а не «регион 95»",
+          _rfc("95") == "Чеченская Республика", str(_rfc("95")))
+    # Шесть управлений объявляют ленту по своему адресу: по общему
+    # NN.мвд.рф/news/rss они отдают 404.
+    check("особых адресов шесть", len(settings.mvd_rss_url_overrides) == 6,
+          str(len(settings.mvd_rss_url_overrides)))
+    check("особые адреса — только для подключённых кодов",
+          set(settings.mvd_rss_url_overrides) <= _codes)
+    check("адрес по умолчанию прежний",
+          settings.mvd_region_feed("16") == "https://16.мвд.рф/news/rss",
+          settings.mvd_region_feed("16"))
+    check("Вологодская берётся по своему адресу",
+          settings.mvd_region_feed("35") == "https://35.мвд.рф/umvd/news/rss/",
+          settings.mvd_region_feed("35"))
+    check("все особые адреса — сайты МВД",
+          all(".мвд.рф/" in u for u in settings.mvd_rss_url_overrides.values()))
     # МВД Медиа и сайт ведомства раньше лежали в общем списке СМИ.
     # Собираются они по-прежнему, но уже как первоисточники — без
     # keyword-фильтра и отдельной строкой в отчёте.
@@ -1916,6 +1976,173 @@ def test_terminology() -> None:
         check(f"используется «{term}»", term in everything)
 
 
+
+# ==========================================================================
+def test_prevention_and_framing() -> None:
+    """
+    Вторая тема канала — предупреждения о способах обмана, и разнообразие
+    кадров.
+
+    Раньше разбор новой схемы мошенничества получал минус за слова
+    «мошенники», «предупреждает», «вниманию граждан» и уходил в хвост
+    очереди вместе с отчётами о совещаниях, а иллюстрация к любой новости
+    выходила одна и та же: двое сотрудников со спины на улице.
+    """
+    from types import SimpleNamespace
+
+    from config import settings
+    from pipeline import verify as verify_mod
+    from pipeline.image_prompt import (
+        _FRAMING_VARIANTS, _LIGHT_VARIANTS, _WARNING_SCENES, _pick,
+        build_image_prompt, prompt_suffix, wants_warning_frame,
+    )
+    from pipeline.ranking import (
+        PREVENTION_MARKERS, ROUTINE_MARKERS, is_prevention, prevention_score,
+        score_item,
+    )
+    from pipeline.verify import verify_news_item
+    from storage.models import NewsItem, RawNewsItem
+
+    section("Предупреждения о преступлениях и разнообразие кадров")
+
+    def raw(title: str, text: str) -> RawNewsItem:
+        return RawNewsItem(source_name="МВД", source_url="https://x",
+                           title=title, raw_text=text,
+                           published_at=datetime(2026, 11, 26,
+                                                 tzinfo=timezone.utc))
+
+    warning = raw(
+        "Полицейские предупреждают о новой схеме мошенничества",
+        "Мошенники стали звонить от имени соцзащиты и обещать выплату. "
+        "Затем псевдосиловик убеждает перевести накопления на безопасный "
+        "счёт. Не сообщайте код из СМС и не переводите деньги незнакомцам. "
+        "Как не стать жертвой: положите трубку и перезвоните в банк сами." * 2
+    )
+    report = raw(
+        "В Самарской области возбуждено уголовное дело о мошенничестве",
+        "Возбуждено уголовное дело, подозреваемый задержан, изъято "
+        "имущество. Ведётся следствие, подозревается житель области." * 3
+    )
+    rescue = raw(
+        "Полицейский спас ребёнка из горящего дома",
+        "Сотрудник вынес из огня ребёнка и оказал первую помощь." * 4
+    )
+
+    # --- очередь ---
+    check("предупреждение набирает баллы предупреждения",
+          prevention_score(warning) >= 16, str(prevention_score(warning)))
+    check("сводка о деле предупреждением не считается",
+          not is_prevention(report), str(prevention_score(report)))
+    check("предупреждение распознаётся", is_prevention(warning))
+    check("предупреждение больше не уходит в минус",
+          score_item(warning) > 0, str(score_item(warning)))
+    check("предупреждение выше сводки о том же мошенничестве",
+          score_item(warning) > score_item(report))
+    check("спасение по-прежнему в плюсе", score_item(rescue) > 0)
+
+    routine_words = {m for m, _ in ROUTINE_MARKERS}
+    for word in ("предупрежда", "напомина", "вниманию граждан"):
+        check(f"«{word}» убрано из рутины", word not in routine_words)
+    prevention_words = {m for m, _ in PREVENTION_MARKERS}
+    check("маркеры предупреждения и рутины не пересекаются",
+          not (routine_words & prevention_words),
+          str(routine_words & prevention_words))
+
+    # --- верификация: вторая категория ---
+    def news(title: str, text: str) -> NewsItem:
+        return NewsItem(id="w1", source_name="МВД",
+                        source_url="https://мвд.рф/news/1", title=title,
+                        raw_text=text,
+                        published_at=datetime(2026, 11, 26,
+                                              tzinfo=timezone.utc))
+
+    saved_llm = verify_mod._llm_authenticity_check
+    saved_flag = settings.publish_prevention
+
+    def fake_llm(_text: str) -> dict:
+        # Как ответит модель на разбор схемы: это не подвиг и формально
+        # не «позитивная» новость, но предупреждение.
+        return {
+            "looks_authentic": True, "about_russian_police": True,
+            "is_positive": False, "is_heroic_or_warm": False,
+            "is_crime_warning": True, "reasoning": "разбор схемы обмана",
+            "region": "Самарская область", "city": None,
+            "tags": ["мошенничество"],
+        }
+
+    try:
+        verify_mod._llm_authenticity_check = fake_llm
+        settings.publish_prevention = True
+        passed = verify_news_item(news(warning.title, warning.raw_text))
+        check("предупреждение проходит верификацию", passed.passed)
+        check("категория проставлена", passed.category == "предупреждение")
+        check("категория видна модератору",
+              "предупреждение" in passed.notes.lower())
+
+        settings.publish_prevention = False
+        off = verify_news_item(news(warning.title, warning.raw_text))
+        check("выключателем тема отключается", off.passed is False)
+        check("причина отказа понятна", off.reject_code == "prevention_off")
+    finally:
+        verify_mod._llm_authenticity_check = saved_llm
+        settings.publish_prevention = saved_flag
+
+    # --- кадры ---
+    check("предупреждение просит предметный кадр",
+          wants_warning_frame(news(warning.title, warning.raw_text)))
+    check("спасение просит обычный кадр",
+          not wants_warning_frame(news(rescue.title, rescue.raw_text)))
+    tagged = news("Без примет", "Короткий текст без характерных слов." * 5)
+    tagged.tags = ["мошенничество"]
+    check("ярлык модели тоже включает предметный кадр",
+          wants_warning_frame(tagged))
+
+    no_officers = prompt_suffix(with_officers=False)
+    check("в предметном кадре нет формы",
+          "uniform" not in no_officers.lower()
+          or "No uniformed officers" in no_officers)
+    check("предметный кадр прямо запрещает сотрудников",
+          "No uniformed officers" in no_officers)
+    check("запреты в предметном кадре остались",
+          "No recognizable faces" in no_officers
+          and "No blood" in no_officers)
+
+    # Один и тот же пост -> тот же ракурс; разные посты -> разные.
+    a = SimpleNamespace(id="aaa", source_url="", title="")
+    b = SimpleNamespace(id="bbb", source_url="", title="")
+    check("ракурс устойчив для одной новости",
+          _pick(a, _FRAMING_VARIANTS, "frame")
+          == _pick(a, _FRAMING_VARIANTS, "frame"))
+    spread = {_pick(SimpleNamespace(id=f"n{i}", source_url="", title=""),
+                    _FRAMING_VARIANTS, "frame")[0] for i in range(40)}
+    check("по ленте ракурсы разные", len(spread) >= 6, str(len(spread)))
+    check("ракурс и свет не связаны",
+          _pick(a, _FRAMING_VARIANTS, "frame")[0]
+          != _pick(a, _LIGHT_VARIANTS, "light")[0])
+    check("для предупреждений свой набор кадров",
+          len(_WARNING_SCENES) >= 6)
+    check("предметные кадры не про патруль",
+          all("officer" not in en.lower() for _, en in _WARNING_SCENES))
+
+    saved_key = settings.ai_api_key
+    settings.ai_api_key = ""
+    try:
+        offline_a = build_image_prompt(news(rescue.title, rescue.raw_text))
+        other = news(rescue.title, rescue.raw_text)
+        other.id = "w2"
+        offline_b = build_image_prompt(other)
+        warn_prompt = build_image_prompt(news(warning.title, warning.raw_text))
+    finally:
+        settings.ai_api_key = saved_key
+
+    check("без ключа кадр всё равно собирается", bool(offline_a))
+    check("без ключа кадры у разных новостей разные", offline_a != offline_b)
+    check("в предупреждении без ключа нет сотрудников",
+          "No uniformed officers" in (warn_prompt or ""))
+    check("старого шаблона с улицей больше нет",
+          "calm everyday street scene" not in (offline_a or ""))
+
+
 def main() -> int:
     tests = (
         test_rewrite_sanitizer, test_verify, test_footer, test_db,
@@ -1925,7 +2152,7 @@ def main() -> int:
         test_model_compatibility, test_screen, test_db_path,
         test_data_dir, test_live_delivery, test_graphic_filter,
         test_donation_and_uniform, test_sources_and_panel,
-        test_terminology,
+        test_terminology, test_prevention_and_framing,
     )
 
     for test in tests:
